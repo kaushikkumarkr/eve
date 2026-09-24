@@ -12,6 +12,9 @@ import agency_mcp.ads as ads_module
 from agency_mcp.reporting import build_client_report, report_markdown
 from agency_mcp.connectors import ingest_crm_csv
 from agency_mcp.measurement import record_conversion, register_conversion_source
+from agency_mcp.measurement import check_conversion_batch
+import agency_mcp.secret_store as secret_store
+from agency_mcp.secret_store import generate_master_key, get_client_secret, list_client_secret_names, set_client_secret
 from agency_mcp.policy import check_advertising_policy
 from agency_mcp.service import sync_insights
 from agency_mcp.service import apply_approved_campaign, approve, request_approval
@@ -62,6 +65,7 @@ def test_end_to_end_research_and_campaign_preview(tmp_path):
         assert preview["ads_preview"]["dry_run"] is True
         assert preview["ads_preview"]["would_apply"]["ad_group"]["context_hints"]
         assert preview["ads_preview"]["would_apply"]["campaign"]["budget"]["requires_client_approval"] is True
+        assert preview["ads_preview"]["would_apply"]["ad"]["name"]
         assert len(hints) == 3
 
         logs = session.scalars(select(AuditLog)).all()
@@ -251,3 +255,37 @@ def test_service_package_redacts_sources_and_tracks_jobs(tmp_path):
         assert workspace["client"]["profile"]["audience"] == "local homeowners"
         assert workspace["counts"]["opportunities"] > 0
         assert {job["status"] for job in workspace["recent_jobs"]} == {"completed"}
+
+
+def test_client_secrets_are_encrypted_and_conversion_batch_is_safe(tmp_path, monkeypatch):
+    Session = session_factory(tmp_path)
+    monkeypatch.setattr(
+        secret_store,
+        "settings",
+        replace(secret_store.settings, agency_master_key=generate_master_key()),
+    )
+    with Session() as session:
+        client = create_client(session, "Secret Test", "education")
+        set_client_secret(session, client.id, "OPENAI_ADS_API_KEY", "ads-secret-value")
+        stored = session.scalars(select(secret_store.ClientSecret)).one()
+        assert stored.ciphertext != "ads-secret-value"
+        assert get_client_secret(session, client.id, "OPENAI_ADS_API_KEY") == "ads-secret-value"
+        assert list_client_secret_names(session, client.id)[0]["name"] == "OPENAI_ADS_API_KEY"
+
+        result = check_conversion_batch(
+            session,
+            client.id,
+            "pixel_test",
+            [{
+                "id": "evt-1",
+                "type": "lead_created",
+                "timestamp_ms": 1730000000000,
+                "action_source": "web",
+                "data": {"type": "customer_action"},
+            }],
+        )
+        assert result["valid"] is True
+        assert result["status"] == "locally_validated"
+
+        invalid = check_conversion_batch(session, client.id, "pixel_test", [{}])
+        assert invalid["valid"] is False

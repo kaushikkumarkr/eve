@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from getpass import getpass
 
 import typer
 from sqlalchemy import select
@@ -17,6 +18,8 @@ from .service import (
     update_client_profile,
 )
 from .config import settings
+from .ads import get_ads_adapter
+from .secret_store import generate_master_key, list_client_secret_names, set_client_secret
 from .workflows import run_research, run_service_package
 
 
@@ -50,6 +53,30 @@ def client_profile(client_id: str, profile_json: str) -> None:
     with session_scope() as session:
         client = update_client_profile(session, client_id, profile)
         typer.echo(json.dumps({"id": client.id, "profile": client.profile}, indent=2))
+
+
+@app.command("secrets-keygen")
+def secrets_keygen() -> None:
+    """Print a new encryption key; store it only as AGENCY_MASTER_KEY on the host."""
+    typer.echo(generate_master_key())
+
+
+@app.command("secret-set")
+def secret_set(client_id: str, name: str) -> None:
+    """Prompt for a client integration key and store only encrypted ciphertext."""
+    value = getpass(f"Enter value for {name}: ")
+    init_db()
+    with session_scope() as session:
+        set_client_secret(session, client_id, name, value)
+    typer.echo(json.dumps({"client_id": client_id, "name": name, "stored": True}))
+
+
+@app.command("secret-list")
+def secret_list(client_id: str) -> None:
+    """List stored client secret names without exposing values."""
+    init_db()
+    with session_scope() as session:
+        typer.echo(json.dumps(list_client_secret_names(session, client_id), indent=2))
 
 
 @app.command("clients")
@@ -108,10 +135,20 @@ def health() -> None:
                 ),
                 "ads_mode": settings.ads_mode,
                 "real_ads_mutations_enabled": settings.mutations_enabled,
+                "agency_role": settings.agency_role,
+                "mcp_transport": settings.mcp_transport,
             },
             indent=2,
         )
     )
+
+
+@app.command("ads-account")
+def ads_account(client_id: str) -> None:
+    """Read and verify one client's Ads account without creating or changing anything."""
+    init_db()
+    with session_scope() as session:
+        typer.echo(json.dumps(get_ads_adapter(client_id, session).get_account(), indent=2))
 
 
 @app.command("plan")

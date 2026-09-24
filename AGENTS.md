@@ -12,6 +12,9 @@ This repository is a private, zero-spend agency operations system.
 - Never activate a campaign, upload an audience, send conversion data, or spend budget without explicit approval.
 - Never print or commit API keys.
 - Keep client data tenant-scoped and authorized.
+- Store client Ads and Conversions API keys only through the encrypted secret-store CLI; never pass them through an LLM prompt or MCP result.
+- Operators may draft and preview; only the admin role may approve or apply campaign changes.
+- Never expose streamable HTTP MCP directly to the public Internet; use a private authenticated gateway.
 - Redact common direct identifiers at ingestion and preserve source hashes and redaction metadata.
 - Treat Azure/OpenAI outputs as generated research; retain provider and job status and never present simulation as platform reporting.
 - Use the persisted client profile to scope ICP, markets, products, goals, and exclusions before drafting hints or creative.

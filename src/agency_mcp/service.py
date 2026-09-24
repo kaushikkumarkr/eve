@@ -386,7 +386,12 @@ def create_campaign_plan(session: Session, opportunity_id: str) -> CampaignPlan:
         objective="clicks",
         campaign_name=f"{client.name} - AI visibility test",
         ad_group_name="High-intent evaluation",
-        budget={"daily_spend_limit_micros": 0, "currency": "USD", "requires_client_approval": True},
+        budget={
+            "daily_spend_limit_micros": 0,
+            "max_bid_micros": 0,
+            "currency": "USD",
+            "requires_client_approval": True,
+        },
         targeting={"platforms": ["web"], "locations": {"countries": ["US"]}},
         creative={
             "type": "chat_card",
@@ -398,6 +403,38 @@ def create_campaign_plan(session: Session, opportunity_id: str) -> CampaignPlan:
     session.add(plan)
     session.flush()
     _commit(session, "campaign_plan.created", "campaign_plan", plan.id, {"objective": plan.objective, "hint_ids": [hint.id for hint in hints]})
+    return plan
+
+
+def update_campaign_plan(
+    session: Session,
+    plan_id: str,
+    budget: dict[str, Any] | None = None,
+    targeting: dict[str, Any] | None = None,
+    creative: dict[str, Any] | None = None,
+) -> CampaignPlan:
+    """Apply explicit client-approved planning inputs without activating a campaign."""
+    plan = session.get(CampaignPlan, plan_id)
+    if not plan:
+        raise ValueError(f"Unknown campaign plan: {plan_id}")
+    if budget is not None:
+        plan.budget = {**(plan.budget or {}), **budget}
+    if targeting is not None:
+        plan.targeting = {**(plan.targeting or {}), **targeting}
+    if creative is not None:
+        plan.creative = creative
+    plan.status = "draft"
+    _commit(
+        session,
+        "campaign_plan.updated",
+        "campaign_plan",
+        plan.id,
+        {
+            "budget_keys": sorted(budget or {}),
+            "targeting_keys": sorted(targeting or {}),
+            "creative_updated": creative is not None,
+        },
+    )
     return plan
 
 
@@ -458,7 +495,7 @@ def validate_campaign_plan(session: Session, plan_id: str) -> dict[str, Any]:
 
 def sync_insights(session: Session, client_id: str, campaign_external_id: str, period: str = "latest") -> dict[str, Any]:
     _require_client(session, client_id)
-    metrics = get_ads_adapter().get_insights(campaign_external_id)
+    metrics = get_ads_adapter(client_id, session).get_insights(campaign_external_id)
     snapshot = AdsInsightSnapshot(
         client_id=client_id,
         campaign_external_id=campaign_external_id,
@@ -497,13 +534,17 @@ def preview_campaign(session: Session, plan_id: str) -> dict[str, Any]:
             "bidding_config": {
                 "billing_event_type": "click",
                 "strategy": "fixed_bid",
-                "max_bid_micros": 0,
+                "max_bid_micros": plan.budget.get("max_bid_micros", 0),
                 "requires_client_approval": True,
             },
         },
-        "ad": {"status": "paused", "creative": plan.creative},
+        "ad": {
+            "name": f"{plan.campaign_name} — ChatGPT ad",
+            "status": "paused",
+            "creative": plan.creative,
+        },
     }
-    preview = get_ads_adapter().preview_mutation(payload)
+    preview = get_ads_adapter(plan.client_id, session).preview_mutation(payload)
     result = {"validation": validation, "ads_preview": preview, "approval_required": True, "spend": 0}
     _commit(session, "campaign.previewed", "campaign_plan", plan.id, result)
     return result
@@ -560,13 +601,17 @@ def apply_approved_campaign(session: Session, plan_id: str, approval_id: str, ap
             "bidding_config": {
                 "billing_event_type": "click",
                 "strategy": "fixed_bid",
-                "max_bid_micros": 0,
+                "max_bid_micros": plan.budget.get("max_bid_micros", 0),
             },
         },
-        "ad": {"status": "paused", "creative": plan.creative},
+        "ad": {
+            "name": f"{plan.campaign_name} — ChatGPT ad",
+            "status": "paused",
+            "creative": plan.creative,
+        },
     }
     try:
-        result = get_ads_adapter().apply_mutation(payload, approved_by)
+        result = get_ads_adapter(plan.client_id, session).apply_mutation(payload, approved_by)
     except AdsMutationBlocked:
         raise
     plan.status = "submitted"

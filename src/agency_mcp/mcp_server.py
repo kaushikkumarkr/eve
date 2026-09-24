@@ -6,6 +6,8 @@ from mcp.server.fastmcp import FastMCP
 from sqlalchemy import select
 
 from .ads import get_ads_adapter
+from .auth import build_http_auth, require_admin
+from .config import settings
 from .db import init_db, session_scope
 from .service import (
     approve,
@@ -20,18 +22,28 @@ from .service import (
     request_approval,
     run_visibility_audit,
     sync_insights,
+    update_campaign_plan,
     update_client_profile,
     validate_campaign_plan,
 )
 from .connectors import ingest_crm_csv
-from .measurement import record_conversion, register_conversion_source
+from .measurement import check_conversion_batch, record_conversion, register_conversion_source
 from .policy import check_advertising_policy
 from .reporting import build_client_report, report_markdown
 from .workflows import run_campaign, run_research, run_service_package
 from .models import Client, WorkflowJob
 
 
-mcp = FastMCP("agency-mcp")
+_auth_settings, _token_verifier = (
+    build_http_auth() if settings.mcp_transport != "stdio" else (None, None)
+)
+mcp = FastMCP(
+    "agency-mcp",
+    host=settings.mcp_host,
+    port=settings.mcp_port,
+    auth=_auth_settings,
+    token_verifier=_token_verifier,
+)
 
 
 @mcp.tool()
@@ -153,6 +165,25 @@ def create_campaign_plan_tool(opportunity_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+def update_campaign_plan_tool(
+    plan_id: str,
+    budget: dict[str, Any] | None = None,
+    targeting: dict[str, Any] | None = None,
+    creative: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Update a draft plan with explicit client inputs; this never activates or spends."""
+    with session_scope() as session:
+        plan = update_campaign_plan(session, plan_id, budget, targeting, creative)
+        return {
+            "id": plan.id,
+            "status": plan.status,
+            "budget": plan.budget,
+            "targeting": plan.targeting,
+            "creative": plan.creative,
+        }
+
+
+@mcp.tool()
 def validate_campaign(plan_id: str) -> dict[str, Any]:
     """Validate creative and campaign fields without contacting Ads."""
     with session_scope() as session:
@@ -177,6 +208,7 @@ def request_approval_tool(entity_type: str, entity_id: str, action: str) -> dict
 @mcp.tool()
 def approve_tool(approval_id: str, approved_by: str) -> dict[str, Any]:
     """Record human approval; this does not itself activate or spend on Ads."""
+    require_admin()
     with session_scope() as session:
         approval = approve(session, approval_id, approved_by)
         return {"id": approval.id, "status": approval.status, "approved_by": approval.approved_by}
@@ -185,6 +217,7 @@ def approve_tool(approval_id: str, approved_by: str) -> dict[str, Any]:
 @mcp.tool()
 def apply_approved_campaign_tool(plan_id: str, approval_id: str, approved_by: str) -> dict[str, Any]:
     """Apply only an explicitly approved campaign plan; resources remain paused."""
+    require_admin()
     with session_scope() as session:
         return apply_approved_campaign(session, plan_id, approval_id, approved_by)
 
@@ -198,8 +231,11 @@ def generate_report(client_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-def sync_ads_account() -> dict[str, Any]:
+def sync_ads_account(client_id: str | None = None) -> dict[str, Any]:
     """Read the configured Ads account; mock mode is used unless explicitly configured otherwise."""
+    if client_id:
+        with session_scope() as session:
+            return get_ads_adapter(client_id, session).get_account()
     return get_ads_adapter().get_account()
 
 
@@ -241,6 +277,20 @@ def record_conversion_tool(
 
 
 @mcp.tool()
+def check_conversion_batch_tool(
+    client_id: str,
+    pixel_id: str,
+    events: list[dict[str, Any]],
+    validate_only: bool = True,
+) -> dict[str, Any]:
+    """Locally or remotely validate a Conversions API batch; live submission requires admin role."""
+    if not validate_only:
+        require_admin()
+    with session_scope() as session:
+        return check_conversion_batch(session, client_id, pixel_id, events, validate_only)
+
+
+@mcp.tool()
 def sync_ads_insights_tool(client_id: str, campaign_external_id: str, period: str = "latest") -> dict[str, Any]:
     """Sync campaign insights; mock mode returns zero-spend metrics."""
     with session_scope() as session:
@@ -249,7 +299,7 @@ def sync_ads_insights_tool(client_id: str, campaign_external_id: str, period: st
 
 def main() -> None:
     init_db()
-    mcp.run(transport="stdio")
+    mcp.run(transport=settings.mcp_transport)
 
 
 if __name__ == "__main__":

@@ -149,7 +149,12 @@ class GuardedRealAdsAdapter:
         }
 
 
-def get_ads_adapter() -> AdsAdapter:
-    if settings.ads_mode == "real" and settings.ads_api_key:
-        return GuardedRealAdsAdapter(settings.ads_api_key, settings.ads_base_url)
+def get_ads_adapter(client_id: str | None = None, session: Any | None = None) -> AdsAdapter:
+    api_key = settings.ads_api_key
+    if client_id and session and settings.agency_master_key:
+        from .secret_store import get_client_secret
+
+        api_key = get_client_secret(session, client_id, "OPENAI_ADS_API_KEY") or api_key
+    if settings.ads_mode == "real" and api_key:
+        return GuardedRealAdsAdapter(api_key, settings.ads_base_url)
     return MockAdsAdapter()

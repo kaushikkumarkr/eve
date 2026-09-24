@@ -32,6 +32,14 @@ class Settings:
     ads_api_key: str | None = None
     ads_base_url: str = "https://api.ads.openai.com/v1"
     mutations_enabled: bool = False
+    agency_role: str = "admin"
+    agency_master_key: str | None = None
+    mcp_transport: str = "stdio"
+    mcp_host: str = "127.0.0.1"
+    mcp_port: int = 8000
+    mcp_public_url: str = "http://127.0.0.1:8000/mcp"
+    mcp_admin_token: str | None = None
+    mcp_operator_token: str | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -51,6 +59,14 @@ class Settings:
             ads_base_url=os.getenv("OPENAI_ADS_BASE_URL", cls.ads_base_url),
             mutations_enabled=os.getenv("AGENCY_MUTATIONS_ENABLED", "false").lower()
             in {"1", "true", "yes"},
+            agency_role=os.getenv("AGENCY_ROLE", cls.agency_role).lower(),
+            agency_master_key=os.getenv("AGENCY_MASTER_KEY") or None,
+            mcp_transport=os.getenv("AGENCY_MCP_TRANSPORT", cls.mcp_transport).lower(),
+            mcp_host=os.getenv("AGENCY_MCP_HOST", cls.mcp_host),
+            mcp_port=int(os.getenv("AGENCY_MCP_PORT", str(cls.mcp_port))),
+            mcp_public_url=os.getenv("AGENCY_MCP_PUBLIC_URL", cls.mcp_public_url),
+            mcp_admin_token=os.getenv("AGENCY_ADMIN_TOKEN") or None,
+            mcp_operator_token=os.getenv("AGENCY_OPERATOR_TOKEN") or None,
         )
 
 

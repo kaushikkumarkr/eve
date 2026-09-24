@@ -28,6 +28,8 @@ uv run agency plan <client-id>
 uv run agency report <client-id>
 uv run agency workspace <client-id>
 uv run agency service-run <client-id>
+uv run agency secret-list <client-id>
+uv run agency ads-account <client-id>
 uv run pytest
 ```
 
@@ -39,6 +41,15 @@ DATABASE_URL=postgresql+psycopg://agency:agency@localhost:55432/agency uv run ag
 ```
 
 The default SQLite database is suitable for a quick local run. PostgreSQL on port `55432` is the recommended development path for testing the production-compatible database backend.
+
+For a shared private host using Docker, keep the host's `.env` out of Git and run:
+
+```bash
+docker compose up -d postgres
+docker compose --profile shared up -d --build agency
+```
+
+The `agency` service listens on port `8000` using authenticated Streamable HTTP. Set both role tokens and `AGENCY_MCP_PUBLIC_URL` in the host `.env`. Put the host behind Cloudflare Access/private networking; do not port-forward the MCP service directly.
 
 ## MCP setup
 
@@ -82,6 +93,29 @@ To use Azure OpenAI for research, set the four Azure variables in `.env` and run
 RESEARCH_MODE=openai uv run agency research <client-id>
 ```
 
+## Two-person internal access and encrypted client keys
+
+For a small team, keep two roles:
+
+- `admin`: can approve and apply campaign changes.
+- `operator`: can ingest data, research, draft, validate, preview, and report.
+
+Set `AGENCY_ROLE=admin` or `AGENCY_ROLE=operator` in each operator's local environment. Generate one host encryption key once and keep it outside Git:
+
+```bash
+uv run agency secrets-keygen
+# place the output in AGENCY_MASTER_KEY in the host .env
+uv run agency secret-set <client-id> OPENAI_ADS_API_KEY
+uv run agency secret-set <client-id> OPENAI_CONVERSIONS_API_KEY
+uv run agency secret-list <client-id>
+```
+
+Only encrypted ciphertext is stored in PostgreSQL. The plaintext key is never returned by an MCP tool or report. Keep the master key in the host environment and back it up separately from the database.
+
+The lowest-cost shared setup is one always-on agency computer running PostgreSQL and the MCP server, with team access through a private network or authenticated tunnel. Keep MCP on `stdio` for local Codex/Claude Code. For a remote MCP endpoint, set `AGENCY_MCP_TRANSPORT=streamable-http`, configure both role tokens, and put it behind Cloudflare Access or another authenticated private gateway. Do not expose the unauthenticated HTTP transport directly to the Internet.
+
+Cloudflare Tunnel is available on all Cloudflare plans, but stable protected access requires a properly configured domain and Access policy; quick tunnels are for testing, not production. ([Cloudflare Tunnel](https://developers.cloudflare.com/tunnel/), [Cloudflare Access policies](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/))
+
 ## Recommended service workflow
 
 1. Create a client workspace with `client-create` or `create_client_tool`.
@@ -93,6 +127,20 @@ RESEARCH_MODE=openai uv run agency research <client-id>
 7. Generate the client report and sync only read-only insights until official account access and measurement are ready.
 
 Every research result is labeled as simulated or hypothesized unless supported by connected client-side measurement. Source content is hashed, common direct identifiers are redacted by default, and workflow jobs are persisted for operational review.
+
+Context hints are relevance descriptions at the ad-group level, not keyword bids, exclusions, or delivery guarantees. Use platform targeting controls for geography and other restrictions, and keep separate ad groups for different products, use cases, and landing pages.
+
+## Live Ads and measurement readiness test
+
+The repository can fully test the local contract without spending money. Live account verification requires a client-created Ads account and an account-scoped Advertiser API key. Store it locally with `secret-set`, set `ADS_MODE=real`, and run:
+
+```bash
+ADS_MODE=real uv run agency ads-account <client-id>
+```
+
+This performs only `GET /v1/ad_account`. It does not create a campaign. The official API uses the account hierarchy `campaign → ad group → ad`; creation endpoints support idempotency keys and paused resources. ([Advertiser API overview](https://developers.openai.com/ads/api-overview))
+
+For measurement, OpenAI uses a Pixel ID plus a separate Conversions API key. The MCP tool `check_conversion_batch_tool` performs local validation by default and can use the official `validate_only` request after the client key is stored. Use the same event ID across browser and server integrations for deduplication. ([Conversion tracking](https://developers.openai.com/ads/conversion-tracking), [Conversions API](https://developers.openai.com/ads/conversions-api))
 
 ## Production-readiness boundary
 

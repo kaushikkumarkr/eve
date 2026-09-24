@@ -187,6 +187,20 @@ class ExternalIntegration(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class ClientSecret(Base):
+    """Encrypted client integration credential; plaintext is never persisted."""
+
+    __tablename__ = "client_secrets"
+    __table_args__ = (UniqueConstraint("client_id", "name", name="uq_client_secret_name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    client_id: Mapped[str] = mapped_column(ForeignKey("clients.id"), index=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
 class ConversionSource(Base):
     __tablename__ = "conversion_sources"
 
