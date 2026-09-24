@@ -14,6 +14,26 @@ from .service import (
     run_visibility_audit,
     validate_campaign_plan,
 )
+from .models import Opportunity, WorkflowJob
+
+
+def _start_job(session: Session, client_id: str, kind: str) -> WorkflowJob:
+    job = WorkflowJob(client_id=client_id, kind=kind, status="running", state={})
+    session.add(job)
+    session.commit()
+    return job
+
+
+def _finish_job(session: Session, job: WorkflowJob, result: dict[str, Any]) -> None:
+    job.status = "completed"
+    job.state = result
+    session.commit()
+
+
+def _fail_job(session: Session, job: WorkflowJob, exc: Exception) -> None:
+    job.status = "failed"
+    job.error = f"{type(exc).__name__}: {exc}"
+    session.commit()
 
 
 class ResearchState(TypedDict, total=False):
@@ -58,7 +78,14 @@ def build_research_graph(session: Session):
 
 def run_research(session: Session, client_id: str) -> dict[str, Any]:
     graph = build_research_graph(session)
-    return graph.invoke({"client_id": client_id, "status": "started"})
+    job = _start_job(session, client_id, "research")
+    try:
+        result = graph.invoke({"client_id": client_id, "status": "started"})
+        _finish_job(session, job, result)
+        return {**result, "job_id": job.id}
+    except Exception as exc:
+        _fail_job(session, job, exc)
+        raise
 
 
 class CampaignState(TypedDict, total=False):
@@ -96,4 +123,29 @@ def build_campaign_graph(session: Session):
 
 def run_campaign(session: Session, opportunity_id: str) -> dict[str, Any]:
     graph = build_campaign_graph(session)
-    return graph.invoke({"opportunity_id": opportunity_id, "status": "started"})
+    opportunity = session.get(Opportunity, opportunity_id)
+    if not opportunity:
+        raise ValueError(f"Unknown opportunity: {opportunity_id}")
+    job = _start_job(session, opportunity.client_id, "campaign")
+    try:
+        result = graph.invoke({"opportunity_id": opportunity_id, "status": "started"})
+        _finish_job(session, job, result)
+        return {**result, "job_id": job.id}
+    except Exception as exc:
+        _fail_job(session, job, exc)
+        raise
+
+
+def run_service_package(session: Session, client_id: str) -> dict[str, Any]:
+    """Run the complete zero-spend research-to-campaign package for a client."""
+    research = run_research(session, client_id)
+    opportunity_ids = research.get("opportunity_ids", [])
+    campaign = run_campaign(session, opportunity_ids[0]) if opportunity_ids else None
+    return {
+        "client_id": client_id,
+        "status": "ready_for_review" if campaign else "no_opportunity",
+        "research": research,
+        "campaign": campaign,
+        "spend": 0,
+        "requires_human_review": True,
+    }

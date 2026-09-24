@@ -26,6 +26,8 @@ uv run agency clients
 uv run agency research <client-id>
 uv run agency plan <client-id>
 uv run agency report <client-id>
+uv run agency workspace <client-id>
+uv run agency service-run <client-id>
 uv run pytest
 ```
 
@@ -65,13 +67,36 @@ The MCP server exposes read, research, CRM ingestion, policy, measurement, plann
 Copy `.env.example` to `.env` or export variables in the shell. Never commit `.env` or API keys.
 
 - `DATABASE_URL`: SQLite by default; use the documented PostgreSQL URL for the container.
-- `OPENAI_API_KEY`: optional; required only for `RESEARCH_MODE=openai`.
+- `OPENAI_API_KEY`: optional standard OpenAI key; used for `RESEARCH_MODE=openai` when Azure is not configured.
+- `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_API_VERSION`, `AZURE_OPENAI_DEPLOYMENT`: optional Azure OpenAI configuration for research. The endpoint is normalized to the Azure resource root automatically, so copied deployment paths are safe.
 - `RESEARCH_MODE`: `heuristic` (default, free) or `openai`.
 - `ADS_MODE`: `mock` (default) or `real` for the guarded read adapter.
 - `OPENAI_ADS_API_KEY`: separate Advertiser API key; do not use a normal model API key here.
 - `AGENCY_MUTATIONS_ENABLED`: keep `false` until real account access, budget, and approval procedures are ready.
 
 The mock Ads adapter never contacts OpenAI and never spends money. Real campaign resources are forced to `paused`, require an approval record, and require an explicit positive budget and bid.
+
+To use Azure OpenAI for research, set the four Azure variables in `.env` and run commands with `RESEARCH_MODE=openai`, for example:
+
+```bash
+RESEARCH_MODE=openai uv run agency research <client-id>
+```
+
+## Recommended service workflow
+
+1. Create a client workspace with `client-create` or `create_client_tool`.
+2. Add ICP, products, markets, goals, and constraints with `client-profile` or `update_client_profile_tool`.
+3. Ingest authorized transcripts, CRM exports, reviews, surveys, and website notes.
+4. Run `service-run` or `run_service_package_tool`. This extracts buyer segments, generates questions, runs simulated visibility research, identifies gaps, drafts context hints, creates a campaign plan, validates it, and produces a dry-run preview.
+5. Review the evidence, policy status, hints, landing page, and budget with the client.
+6. Request and record explicit approval. Keep Ads in mock mode while training the service process.
+7. Generate the client report and sync only read-only insights until official account access and measurement are ready.
+
+Every research result is labeled as simulated or hypothesized unless supported by connected client-side measurement. Source content is hashed, common direct identifiers are redacted by default, and workflow jobs are persisted for operational review.
+
+## Production-readiness boundary
+
+This repository is ready for zero-spend internal service delivery and client reporting. Before real spend, add the official Ads account credentials and documented API contract, verify policy and measurement requirements with the client, complete a human approval, and enable mutations only in a controlled environment. The real adapter remains paused-first and idempotency-protected; the default mock adapter cannot spend money.
 
 ## Project shape
 

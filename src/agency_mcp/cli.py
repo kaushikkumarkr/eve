@@ -8,8 +8,16 @@ from sqlalchemy import select
 from .db import init_db, session_scope
 from .models import Client, Opportunity
 from .reporting import build_client_report, report_markdown
-from .service import create_client, create_campaign_plan, ingest_text, preview_campaign
-from .workflows import run_research
+from .service import (
+    create_campaign_plan,
+    create_client,
+    get_client_workspace,
+    ingest_text,
+    preview_campaign,
+    update_client_profile,
+)
+from .config import settings
+from .workflows import run_research, run_service_package
 
 
 app = typer.Typer(help="Internal AI Ads agency operations")
@@ -27,6 +35,21 @@ def client_create(name: str, vertical: str = "general", website: str | None = No
     with session_scope() as session:
         client = create_client(session, name, vertical, website)
         typer.echo(json.dumps({"id": client.id, "name": client.name}, indent=2))
+
+
+@app.command("client-profile")
+def client_profile(client_id: str, profile_json: str) -> None:
+    """Merge a JSON profile containing ICP, markets, products, and goals."""
+    init_db()
+    try:
+        profile = json.loads(profile_json)
+    except json.JSONDecodeError as exc:
+        raise typer.BadParameter("profile_json must be valid JSON") from exc
+    if not isinstance(profile, dict):
+        raise typer.BadParameter("profile_json must be a JSON object")
+    with session_scope() as session:
+        client = update_client_profile(session, client_id, profile)
+        typer.echo(json.dumps({"id": client.id, "profile": client.profile}, indent=2))
 
 
 @app.command("clients")
@@ -51,6 +74,44 @@ def research(client_id: str) -> None:
     with session_scope() as session:
         result = run_research(session, client_id)
         typer.echo(json.dumps(result, indent=2))
+
+
+@app.command("service-run")
+def service_run(client_id: str) -> None:
+    """Run the complete zero-spend service package for a client."""
+    init_db()
+    with session_scope() as session:
+        typer.echo(json.dumps(run_service_package(session, client_id), indent=2))
+
+
+@app.command("workspace")
+def workspace(client_id: str) -> None:
+    """Show a safe operational summary for one client."""
+    init_db()
+    with session_scope() as session:
+        typer.echo(json.dumps(get_client_workspace(session, client_id), indent=2))
+
+
+@app.command("health")
+def health() -> None:
+    """Check local configuration and database initialization without spending money."""
+    init_db()
+    typer.echo(
+        json.dumps(
+            {
+                "database": "ok",
+                "research_mode": settings.research_mode,
+                "azure_openai_configured": bool(
+                    settings.azure_openai_endpoint
+                    and settings.azure_openai_api_key
+                    and settings.azure_openai_deployment
+                ),
+                "ads_mode": settings.ads_mode,
+                "real_ads_mutations_enabled": settings.mutations_enabled,
+            },
+            indent=2,
+        )
+    )
 
 
 @app.command("plan")

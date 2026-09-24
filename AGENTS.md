@@ -12,13 +12,17 @@ This repository is a private, zero-spend agency operations system.
 - Never activate a campaign, upload an audience, send conversion data, or spend budget without explicit approval.
 - Never print or commit API keys.
 - Keep client data tenant-scoped and authorized.
+- Redact common direct identifiers at ingestion and preserve source hashes and redaction metadata.
+- Treat Azure/OpenAI outputs as generated research; retain provider and job status and never present simulation as platform reporting.
+- Use the persisted client profile to scope ICP, markets, products, goals, and exclusions before drafting hints or creative.
 
 ## Safe workflow
 
 1. Inspect existing records.
-2. Run research or planning workflows.
-3. Validate the result.
-4. Show a dry-run payload.
-5. Request explicit approval.
-6. Apply only the approved action.
-7. Record the outcome in the audit log.
+2. Confirm the client profile and authorized source scope.
+3. Run research or planning workflows.
+4. Validate the result and inspect the persisted workflow job.
+5. Show a dry-run payload.
+6. Request explicit approval.
+7. Apply only the approved action.
+8. Record the outcome in the audit log and report measurement limitations.

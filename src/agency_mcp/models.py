@@ -25,6 +25,7 @@ class Client(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     vertical: Mapped[str] = mapped_column(String(100), default="general")
     website: Mapped[str | None] = mapped_column(String(2048))
+    profile: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     status: Mapped[str] = mapped_column(String(30), default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
@@ -40,6 +41,8 @@ class SourceDocument(Base):
     name: Mapped[str] = mapped_column(String(300), nullable=False)
     kind: Mapped[str] = mapped_column(String(50), default="text")
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    redaction_summary: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     client: Mapped[Client] = relationship(back_populates="sources")

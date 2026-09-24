@@ -6,7 +6,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from agency_mcp.db import Base
-from agency_mcp.models import AuditLog, CampaignPlan, Opportunity
+from agency_mcp.models import AuditLog, CampaignPlan, Opportunity, SourceDocument
 from agency_mcp.ads import GuardedRealAdsAdapter, MockAdsAdapter
 import agency_mcp.ads as ads_module
 from agency_mcp.reporting import build_client_report, report_markdown
@@ -25,6 +25,7 @@ from agency_mcp.service import (
 )
 from agency_mcp.workflows import run_research
 from agency_mcp.workflows import run_campaign
+from agency_mcp.config import normalize_azure_endpoint
 
 
 def session_factory(tmp_path):
@@ -61,6 +62,7 @@ def test_end_to_end_research_and_campaign_preview(tmp_path):
         assert preview["ads_preview"]["dry_run"] is True
         assert preview["ads_preview"]["would_apply"]["ad_group"]["context_hints"]
         assert preview["ads_preview"]["would_apply"]["campaign"]["budget"]["requires_client_approval"] is True
+        assert len(hints) == 3
 
         logs = session.scalars(select(AuditLog)).all()
         assert len(logs) >= 8
@@ -207,3 +209,45 @@ def test_campaign_workflow_is_langgraph_orchestrated(tmp_path):
         assert result["status"] == "previewed"
         assert result["validation"]["valid"] is True
         assert result["preview"]["spend"] == 0
+
+
+def test_normalize_azure_endpoint():
+    assert normalize_azure_endpoint(
+        "https://example.openai.azure.com/openai/deployments/demo"
+    ) == "https://example.openai.azure.com"
+
+
+def test_service_package_redacts_sources_and_tracks_jobs(tmp_path):
+    Session = session_factory(tmp_path)
+    with Session() as session:
+        client = create_client(session, "Service Package Test", "local_services")
+        from agency_mcp.service import get_client_workspace, update_client_profile
+
+        update_client_profile(
+            session,
+            client.id,
+            {"audience": "local homeowners", "locations": ["New York"], "goals": ["qualified leads"]},
+        )
+        ingest_text(
+            session,
+            client.id,
+            "sales-call.txt",
+            "The buyer compares quality and price. Contact jane@example.com at 212-555-0198.",
+            "call_transcript",
+        )
+        source = session.scalars(select(SourceDocument).where(SourceDocument.client_id == client.id)).one()
+        assert "jane@example.com" not in source.content
+        assert "[REDACTED_EMAIL]" in source.content
+        assert source.content_hash
+        assert source.redaction_summary["email"] == 1
+
+        from agency_mcp.workflows import run_service_package
+
+        result = run_service_package(session, client.id)
+        assert result["status"] == "ready_for_review"
+        assert result["spend"] == 0
+        assert result["campaign"]["preview"]["spend"] == 0
+        workspace = get_client_workspace(session, client.id)
+        assert workspace["client"]["profile"]["audience"] == "local homeowners"
+        assert workspace["counts"]["opportunities"] > 0
+        assert {job["status"] for job in workspace["recent_jobs"]} == {"completed"}

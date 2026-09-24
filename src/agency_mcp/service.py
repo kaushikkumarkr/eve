@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Any
 
@@ -23,6 +24,7 @@ from .models import (
     VisibilityFinding,
     PolicyCheck,
     AdsInsightSnapshot,
+    WorkflowJob,
 )
 from .policy import check_advertising_policy
 
@@ -36,28 +38,129 @@ def _sentences(content: str) -> list[str]:
     return [part.strip() for part in re.split(r"(?<=[.!?])\s+|\n+", content) if part.strip()]
 
 
-def create_client(session: Session, name: str, vertical: str = "general", website: str | None = None) -> Client:
-    client = Client(name=name, vertical=vertical, website=website)
+def _require_client(session: Session, client_id: str) -> Client:
+    client = session.get(Client, client_id)
+    if not client:
+        raise ValueError(f"Unknown client: {client_id}")
+    return client
+
+
+def _redact_sensitive(content: str) -> tuple[str, dict[str, int]]:
+    redactions: dict[str, int] = {}
+
+    def replace(pattern: str, token: str, name: str, value: str) -> str:
+        result, count = re.subn(pattern, token, value, flags=re.IGNORECASE)
+        if count:
+            redactions[name] = count
+        return result
+
+    content = replace(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b", "[REDACTED_EMAIL]", "email", content)
+    content = replace(
+        r"(?<!\w)(?:\+?\d[\d .()\-]{7,}\d)(?!\w)",
+        "[REDACTED_PHONE]",
+        "phone",
+        content,
+    )
+    content = replace(r"\b(?:\d[ -]*?){13,19}\b", "[REDACTED_PAYMENT]", "payment", content)
+    return content, redactions
+
+
+def create_client(
+    session: Session,
+    name: str,
+    vertical: str = "general",
+    website: str | None = None,
+    profile: dict[str, Any] | None = None,
+) -> Client:
+    client = Client(name=name, vertical=vertical, website=website, profile=profile or {})
     session.add(client)
     session.flush()
     _commit(session, "client.created", "client", client.id, {"name": name, "vertical": vertical})
     return client
 
 
-def ingest_text(session: Session, client_id: str, name: str, content: str, kind: str = "text") -> SourceDocument:
-    client = session.get(Client, client_id)
-    if not client:
-        raise ValueError(f"Unknown client: {client_id}")
-    source = SourceDocument(client_id=client_id, name=name, kind=kind, content=content)
+def update_client_profile(session: Session, client_id: str, profile: dict[str, Any]) -> Client:
+    client = _require_client(session, client_id)
+    client.profile = {**(client.profile or {}), **profile}
+    _commit(session, "client.profile.updated", "client", client.id, {"profile_keys": sorted(profile)})
+    return client
+
+
+def get_client_workspace(session: Session, client_id: str) -> dict[str, Any]:
+    client = _require_client(session, client_id)
+    sources = session.scalars(select(SourceDocument).where(SourceDocument.client_id == client_id)).all()
+    segments = session.scalars(select(BuyerSegment).where(BuyerSegment.client_id == client_id)).all()
+    findings = session.scalars(select(VisibilityFinding).where(VisibilityFinding.client_id == client_id)).all()
+    opportunities = session.scalars(select(Opportunity).where(Opportunity.client_id == client_id)).all()
+    plans = session.scalars(select(CampaignPlan).where(CampaignPlan.client_id == client_id)).all()
+    jobs = session.scalars(select(WorkflowJob).where(WorkflowJob.client_id == client_id).order_by(WorkflowJob.created_at.desc())).all()
+    return {
+        "client": {
+            "id": client.id,
+            "name": client.name,
+            "vertical": client.vertical,
+            "website": client.website,
+            "status": client.status,
+            "profile": client.profile or {},
+        },
+        "counts": {
+            "sources": len(sources),
+            "segments": len(segments),
+            "findings": len(findings),
+            "opportunities": len(opportunities),
+            "campaign_plans": len(plans),
+        },
+        "opportunities": [
+            {"id": item.id, "title": item.title, "score": item.score, "status": item.status}
+            for item in opportunities
+        ],
+        "campaign_plans": [
+            {"id": item.id, "name": item.campaign_name, "status": item.status}
+            for item in plans
+        ],
+        "recent_jobs": [
+            {"id": item.id, "kind": item.kind, "status": item.status, "error": item.error}
+            for item in jobs[:10]
+        ],
+    }
+
+
+def ingest_text(
+    session: Session,
+    client_id: str,
+    name: str,
+    content: str,
+    kind: str = "text",
+    redact_sensitive: bool = True,
+) -> SourceDocument:
+    _require_client(session, client_id)
+    stored_content, redaction_summary = (
+        _redact_sensitive(content) if redact_sensitive else (content, {})
+    )
+    source = SourceDocument(
+        client_id=client_id,
+        name=name,
+        kind=kind,
+        content=stored_content,
+        content_hash=hashlib.sha256(stored_content.encode("utf-8")).hexdigest(),
+        redaction_summary=redaction_summary,
+    )
     session.add(source)
     session.flush()
-    for sentence in _sentences(content):
+    for sentence in _sentences(stored_content):
         session.add(Evidence(client_id=client_id, source_document_id=source.id, statement=sentence, confidence=0.65))
-    _commit(session, "source.ingested", "source_document", source.id, {"name": name, "kind": kind})
+    _commit(
+        session,
+        "source.ingested",
+        "source_document",
+        source.id,
+        {"name": name, "kind": kind, "content_hash": source.content_hash, "redactions": redaction_summary},
+    )
     return source
 
 
 def extract_voc(session: Session, client_id: str) -> list[BuyerSegment]:
+    _require_client(session, client_id)
     sources = session.scalars(select(SourceDocument).where(SourceDocument.client_id == client_id)).all()
     combined = " ".join(source.content for source in sources).lower()
     patterns = [
@@ -69,22 +172,36 @@ def extract_voc(session: Session, client_id: str) -> list[BuyerSegment]:
     segments: list[BuyerSegment] = []
     for name, description, keywords in patterns:
         if any(keyword in combined for keyword in keywords):
-            segment = BuyerSegment(
-                client_id=client_id,
-                name=name,
-                description=description,
-                attributes={"matched_keywords": [keyword for keyword in keywords if keyword in combined], "status": "inferred"},
+            segment = session.scalar(
+                select(BuyerSegment).where(
+                    BuyerSegment.client_id == client_id,
+                    BuyerSegment.name == name,
+                )
             )
-            session.add(segment)
+            if not segment:
+                segment = BuyerSegment(client_id=client_id, name=name, description=description)
+                session.add(segment)
+            segment.description = description
+            segment.attributes = {
+                "matched_keywords": [keyword for keyword in keywords if keyword in combined],
+                "status": "inferred",
+            }
             segments.append(segment)
     if not segments:
-        segment = BuyerSegment(
-            client_id=client_id,
-            name="general evaluator",
-            description="A buyer evaluating whether the client is a suitable solution.",
-            attributes={"status": "inferred"},
+        segment = session.scalar(
+            select(BuyerSegment).where(
+                BuyerSegment.client_id == client_id,
+                BuyerSegment.name == "general evaluator",
+            )
         )
-        session.add(segment)
+        if not segment:
+            segment = BuyerSegment(
+                client_id=client_id,
+                name="general evaluator",
+                description="A buyer evaluating whether the client is a suitable solution.",
+            )
+            session.add(segment)
+        segment.attributes = {"status": "inferred"}
         segments.append(segment)
     session.flush()
     _commit(session, "voc.extracted", "client", client_id, {"segment_ids": [segment.id for segment in segments]})
@@ -92,10 +209,9 @@ def extract_voc(session: Session, client_id: str) -> list[BuyerSegment]:
 
 
 def generate_questions(session: Session, client_id: str) -> list[str]:
+    _require_client(session, client_id)
     segments = session.scalars(select(BuyerSegment).where(BuyerSegment.client_id == client_id)).all()
-    client = session.get(Client, client_id)
-    if not client:
-        raise ValueError(f"Unknown client: {client_id}")
+    client = _require_client(session, client_id)
     questions = [f"What should a {segment.name} look for when choosing a {client.vertical} solution?" for segment in segments]
     provider = get_research_provider()
     if provider and settings.research_mode.lower() == "openai":
@@ -115,33 +231,76 @@ def generate_questions(session: Session, client_id: str) -> list[str]:
 
 
 def run_visibility_audit(session: Session, client_id: str, questions: list[str] | None = None) -> list[ConversationTest]:
-    client = session.get(Client, client_id)
-    if not client:
-        raise ValueError(f"Unknown client: {client_id}")
+    client = _require_client(session, client_id)
     questions = questions or generate_questions(session, client_id)
+    simulated_results: dict[str, dict[str, Any]] = {}
+    provider = get_research_provider()
+    if provider and settings.research_mode.lower() == "openai":
+        try:
+            result = provider.generate_json(
+                "Return JSON with a top-level `tests` array. For each supplied buyer question, include "
+                "`question`, `answer`, `brands` (array of brand/category names mentioned), and "
+                "`client_mentioned` (boolean). This is a simulated research exercise, not an official "
+                "platform result. Do not invent specific client claims; use category-level reasoning when unsure.",
+                "Client name: "
+                + client.name
+                + "\nClient vertical: "
+                + client.vertical
+                + "\nBuyer questions:\n"
+                + "\n".join(f"- {question}" for question in questions),
+            )
+            candidates = result.value.get("tests", []) if isinstance(result.value, dict) else []
+            for candidate in candidates:
+                if isinstance(candidate, dict) and isinstance(candidate.get("question"), str):
+                    simulated_results[candidate["question"].strip()] = candidate
+        except Exception as exc:  # noqa: BLE001 - keep the zero-cost fallback available
+            _commit(
+                session,
+                "visibility.audit.provider_fallback",
+                "client",
+                client_id,
+                {"provider": provider.provider, "error_type": type(exc).__name__},
+            )
     tests: list[ConversationTest] = []
     for question in questions:
-        competitors = ["Established category leader", "Specialist alternative"]
-        answer = f"Synthetic audit for: {question}. Consider {', '.join(competitors)} and evaluate fit, price, quality, and evidence."
+        candidate = simulated_results.get(question, {})
+        competitors = candidate.get("brands") if isinstance(candidate.get("brands"), list) else None
+        competitors = [str(item) for item in (competitors or ["Established category leader", "Specialist alternative"])]
+        answer = candidate.get("answer") if isinstance(candidate.get("answer"), str) else None
+        answer = answer or f"Synthetic audit for: {question}. Consider {', '.join(competitors)} and evaluate fit, price, quality, and evidence."
+        client_mentioned = bool(candidate.get("client_mentioned", False))
         test = ConversationTest(
             client_id=client_id,
             question=question,
-            provider="synthetic",
+            provider=provider.provider if simulated_results.get(question) and provider else "synthetic",
             answer=answer,
             brands=competitors,
-            client_mentioned=False,
+            client_mentioned=client_mentioned,
         )
         session.add(test)
         tests.append(test)
     session.flush()
-    _commit(session, "visibility.audit.completed", "client", client_id, {"test_ids": [test.id for test in tests], "provider": "synthetic"})
+    _commit(
+        session,
+        "visibility.audit.completed",
+        "client",
+        client_id,
+        {
+            "test_ids": [test.id for test in tests],
+            "provider": provider.provider if simulated_results and provider else "synthetic",
+            "hypothesis": True,
+        },
+    )
     return tests
 
 
 def identify_gaps(session: Session, client_id: str) -> list[Opportunity]:
+    _require_client(session, client_id)
     tests = session.scalars(select(ConversationTest).where(ConversationTest.client_id == client_id)).all()
     opportunities: list[Opportunity] = []
     for test in tests:
+        if test.client_mentioned:
+            continue
         finding = VisibilityFinding(
             client_id=client_id,
             conversation_test_id=test.id,
@@ -151,14 +310,24 @@ def identify_gaps(session: Session, client_id: str) -> list[Opportunity]:
         )
         session.add(finding)
         session.flush()
-        opportunity = Opportunity(
-            client_id=client_id,
-            title=f"Backfill visibility for: {test.question}",
-            category="paid_visibility",
-            score=0.55,
-            evidence_ids=[finding.id, test.id],
+        title = f"Backfill visibility for: {test.question}"
+        opportunity = session.scalar(
+            select(Opportunity).where(
+                Opportunity.client_id == client_id,
+                Opportunity.title == title,
+            )
         )
-        session.add(opportunity)
+        if not opportunity:
+            opportunity = Opportunity(
+                client_id=client_id,
+                title=title,
+                category="paid_visibility",
+                score=0.55,
+                evidence_ids=[finding.id, test.id],
+            )
+            session.add(opportunity)
+        else:
+            opportunity.evidence_ids = [finding.id, test.id]
         opportunities.append(opportunity)
     session.flush()
     _commit(session, "visibility.gaps.created", "client", client_id, {"opportunity_ids": [item.id for item in opportunities]})
@@ -169,18 +338,38 @@ def generate_context_hints(session: Session, opportunity_id: str) -> list[Contex
     opportunity = session.get(Opportunity, opportunity_id)
     if not opportunity:
         raise ValueError(f"Unknown opportunity: {opportunity_id}")
-    client = session.get(Client, opportunity.client_id)
-    if not client:
-        raise ValueError(f"Unknown client: {opportunity.client_id}")
-    hint_text = (
-        f"Show this ad to people actively evaluating {client.vertical} options who are comparing alternatives, "
-        "care about fit and quality, and want a clear next step from a credible provider."
-    )
-    hint = ContextHint(client_id=client.id, opportunity_id=opportunity.id, text=hint_text, confidence=0.55)
-    session.add(hint)
+    client = _require_client(session, opportunity.client_id)
+    existing = session.scalars(select(ContextHint).where(ContextHint.opportunity_id == opportunity.id)).all()
+    if existing:
+        return existing
+    question = opportunity.title.removeprefix("Backfill visibility for: ")
+    profile = client.profile or {}
+    audience = profile.get("audience") or "people actively evaluating options"
+    location = profile.get("locations") or "their target market"
+    hint_texts = [
+        f"Show this ad to {audience} in {location} who are asking: {question}. They are comparing alternatives and want a credible next step.",
+        f"Show this ad when a buyer is actively researching {client.vertical}, weighing price, quality, and fit, and the conversation indicates intent to choose a provider soon.",
+        f"Show this ad to people dissatisfied with their current {client.vertical} option who are evaluating a switch and need clear evidence, eligibility, and next steps.",
+    ]
+    hints = [
+        ContextHint(
+            client_id=client.id,
+            opportunity_id=opportunity.id,
+            text=text,
+            confidence=0.55,
+        )
+        for text in hint_texts
+    ]
+    session.add_all(hints)
     session.flush()
-    _commit(session, "context_hint.generated", "context_hint", hint.id, {"status": "draft", "evidence_ids": opportunity.evidence_ids})
-    return [hint]
+    _commit(
+        session,
+        "context_hint.generated",
+        "opportunity",
+        opportunity.id,
+        {"hint_ids": [hint.id for hint in hints], "status": "draft", "evidence_ids": opportunity.evidence_ids},
+    )
+    return hints
 
 
 def create_campaign_plan(session: Session, opportunity_id: str) -> CampaignPlan:
@@ -228,6 +417,9 @@ def validate_campaign_plan(session: Session, plan_id: str) -> dict[str, Any]:
         errors.append("creative.body must be at most 100 characters")
     if not target_url.startswith(("http://", "https://")):
         errors.append("creative.target_url must use http or https")
+    hints = session.scalars(select(ContextHint).where(ContextHint.opportunity_id == plan.opportunity_id)).all()
+    if not hints:
+        errors.append("campaign requires at least one context hint")
     policy = check_advertising_policy(
         client.vertical if client else "general",
         title,
@@ -265,6 +457,7 @@ def validate_campaign_plan(session: Session, plan_id: str) -> dict[str, Any]:
 
 
 def sync_insights(session: Session, client_id: str, campaign_external_id: str, period: str = "latest") -> dict[str, Any]:
+    _require_client(session, client_id)
     metrics = get_ads_adapter().get_insights(campaign_external_id)
     snapshot = AdsInsightSnapshot(
         client_id=client_id,
@@ -317,6 +510,10 @@ def preview_campaign(session: Session, plan_id: str) -> dict[str, Any]:
 
 
 def request_approval(session: Session, entity_type: str, entity_id: str, action: str) -> Approval:
+    if entity_type == "campaign_plan" and not session.get(CampaignPlan, entity_id):
+        raise ValueError(f"Unknown campaign plan: {entity_id}")
+    if action not in {"preview", "apply", "pause", "resume"}:
+        raise ValueError(f"Unsupported approval action: {action}")
     approval = Approval(entity_type=entity_type, entity_id=entity_id, action=action, status="pending")
     session.add(approval)
     session.flush()
@@ -343,6 +540,8 @@ def apply_approved_campaign(session: Session, plan_id: str, approval_id: str, ap
         raise ValueError("Approval does not match the campaign plan")
     if approval.status != "approved":
         raise ValueError("Campaign plan requires an approved approval record")
+    if approval.approved_by != approved_by:
+        raise ValueError("The applying operator must match the approving operator")
     validation = validate_campaign_plan(session, plan_id)
     if not validation["valid"]:
         raise ValueError(f"Campaign plan is invalid: {validation['errors']}")

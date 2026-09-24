@@ -34,16 +34,35 @@ def _apply_additive_schema_patches() -> None:
     additive patch here makes the local zero-spend MVP safe to upgrade in place.
     """
     inspector = inspect(engine)
-    if "campaign_plans" not in inspector.get_table_names():
-        return
-    columns = {column["name"] for column in inspector.get_columns("campaign_plans")}
-    if "budget" in columns:
+    tables = set(inspector.get_table_names())
+    additions = {
+        "campaign_plans": {"budget": "JSON"},
+        "clients": {"profile": "JSON"},
+        "source_documents": {
+            "content_hash": "VARCHAR(64)",
+            "redaction_summary": "JSON",
+        },
+    }
+    pending: list[tuple[str, str, str]] = []
+    for table, columns_to_add in additions.items():
+        if table not in tables:
+            continue
+        existing = {column["name"] for column in inspector.get_columns(table)}
+        pending.extend(
+            (table, column, sql_type)
+            for column, sql_type in columns_to_add.items()
+            if column not in existing
+        )
+    if not pending:
         return
     with engine.begin() as connection:
-        if engine.dialect.name == "postgresql":
-            connection.execute(text("ALTER TABLE campaign_plans ADD COLUMN IF NOT EXISTS budget JSON"))
-        elif engine.dialect.name == "sqlite":
-            connection.execute(text("ALTER TABLE campaign_plans ADD COLUMN budget JSON"))
+        for table, column, sql_type in pending:
+            if engine.dialect.name == "postgresql":
+                connection.execute(
+                    text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {sql_type}")
+                )
+            elif engine.dialect.name == "sqlite":
+                connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}"))
 
 
 def session_scope():

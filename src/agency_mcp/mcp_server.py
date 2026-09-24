@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from sqlalchemy import select
 
 from .ads import get_ads_adapter
 from .db import init_db, session_scope
@@ -13,29 +14,71 @@ from .service import (
     create_client,
     generate_context_hints,
     generate_questions,
+    get_client_workspace,
     ingest_text,
     preview_campaign,
     request_approval,
     run_visibility_audit,
     sync_insights,
+    update_client_profile,
     validate_campaign_plan,
 )
 from .connectors import ingest_crm_csv
 from .measurement import record_conversion, register_conversion_source
 from .policy import check_advertising_policy
 from .reporting import build_client_report, report_markdown
-from .workflows import run_campaign, run_research
+from .workflows import run_campaign, run_research, run_service_package
+from .models import Client, WorkflowJob
 
 
 mcp = FastMCP("agency-mcp")
 
 
 @mcp.tool()
-def create_client_tool(name: str, vertical: str = "general", website: str | None = None) -> dict[str, Any]:
+def create_client_tool(
+    name: str,
+    vertical: str = "general",
+    website: str | None = None,
+    profile: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Create an internal client record."""
     with session_scope() as session:
-        client = create_client(session, name, vertical, website)
-        return {"id": client.id, "name": client.name, "vertical": client.vertical, "website": client.website}
+        client = create_client(session, name, vertical, website, profile)
+        return {
+            "id": client.id,
+            "name": client.name,
+            "vertical": client.vertical,
+            "website": client.website,
+            "profile": client.profile,
+        }
+
+
+@mcp.tool()
+def list_clients_tool() -> dict[str, Any]:
+    """List client workspaces without exposing source contents or secrets."""
+    with session_scope() as session:
+        clients = session.scalars(select(Client).order_by(Client.created_at)).all()
+        return {
+            "clients": [
+                {"id": client.id, "name": client.name, "vertical": client.vertical, "status": client.status}
+                for client in clients
+            ]
+        }
+
+
+@mcp.tool()
+def update_client_profile_tool(client_id: str, profile: dict[str, Any]) -> dict[str, Any]:
+    """Merge ICP, markets, goals, products, and client constraints into a workspace profile."""
+    with session_scope() as session:
+        client = update_client_profile(session, client_id, profile)
+        return {"id": client.id, "profile": client.profile}
+
+
+@mcp.tool()
+def get_client_workspace_tool(client_id: str) -> dict[str, Any]:
+    """Return a safe operational summary of one client workspace."""
+    with session_scope() as session:
+        return get_client_workspace(session, client_id)
 
 
 @mcp.tool()
@@ -51,6 +94,31 @@ def run_research_workflow(client_id: str) -> dict[str, Any]:
     """Run the deterministic zero-cost research workflow and return opportunity IDs."""
     with session_scope() as session:
         return run_research(session, client_id)
+
+
+@mcp.tool()
+def run_service_package_tool(client_id: str) -> dict[str, Any]:
+    """Run research, visibility-gap analysis, campaign drafting, validation, and dry-run preview."""
+    with session_scope() as session:
+        return run_service_package(session, client_id)
+
+
+@mcp.tool()
+def list_workflow_jobs_tool(client_id: str, limit: int = 20) -> dict[str, Any]:
+    """List durable workflow status for a client, without returning source content."""
+    with session_scope() as session:
+        jobs = session.scalars(
+            select(WorkflowJob)
+            .where(WorkflowJob.client_id == client_id)
+            .order_by(WorkflowJob.created_at.desc())
+            .limit(max(1, min(limit, 100)))
+        ).all()
+        return {
+            "jobs": [
+                {"id": job.id, "kind": job.kind, "status": job.status, "error": job.error, "state": job.state}
+                for job in jobs
+            ]
+        }
 
 
 @mcp.tool()

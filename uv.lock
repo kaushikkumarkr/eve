@@ -17,6 +17,7 @@ dependencies = [
     { name = "openai" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
+    { name = "python-dotenv" },
     { name = "sqlalchemy" },
     { name = "typer" },
 ]
@@ -36,6 +37,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0.0" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "sqlalchemy", specifier = ">=2.0.0" },
     { name = "typer", specifier = ">=0.12.0" },
 ]
