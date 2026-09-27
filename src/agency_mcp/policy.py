@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-POLICY_VERSION = "2026-09-10"
+POLICY_VERSION = "internal-preflight-2026-09-26"
 
 # These are intentionally conservative preflight signals, not a replacement for OpenAI review.
 REJECT_TERMS = {
@@ -14,7 +14,10 @@ REJECT_TERMS = {
     "adult": "adult content is not permitted",
     "dating": "dating/adult categories are restricted",
     "sexual": "sexual content is not permitted",
-    "guaranteed return": "guaranteed financial-return claims are prohibited",
+    "guaranteed": "guaranteed outcome or delivery claims require removal",
+    "recommended by chatgpt": "Do not claim ChatGPT endorsement",
+    "chatgpt recommends": "Do not claim ChatGPT endorsement",
+    "#1 on chatgpt": "Do not make unverified ChatGPT ranking claims",
 }
 MANUAL_TERMS = {
     "health": "health-related advertising may require manual approval",

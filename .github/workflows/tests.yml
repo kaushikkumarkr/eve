@@ -1,17 +1,61 @@
-name: tests
+name: Tests
 
 on:
   push:
-    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: eve_test
+          POSTGRES_USER: eve
+          POSTGRES_PASSWORD: eve_test_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U eve -d eve_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://eve:eve_test_only@127.0.0.1:5432/eve_test
+      EVE_TEST_POSTGRES_URL: postgresql+psycopg://eve:eve_test_only@127.0.0.1:5432/eve_test
+      ADS_MODE: mock
+      AGENCY_MUTATIONS_ENABLED: "false"
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-      - run: uv sync --extra dev
+      - run: uv sync --frozen --extra dev
+      - run: uv run alembic upgrade head
       - run: uv run pytest
+      - run: uv run python -m compileall -q src migrations tests
+      - name: Compile private Azure foundation and verify checked-in ARM output
+        run: |
+          az bicep build --file infra/azure/main.bicep
+          az bicep build --file infra/azure/apps.bicep
+          az bicep build --file infra/azure/secret-writer-role.bicep
+          git diff --exit-code -- infra/azure/main.json infra/azure/apps.json infra/azure/secret-writer-role.json
+      - name: Verify installed wheel can initialize a database
+        run: |
+          dist="$RUNNER_TEMP/eve-wheel-dist"
+          site="$RUNNER_TEMP/eve-wheel-site"
+          run_dir="$RUNNER_TEMP/eve-wheel-run"
+          mkdir -p "$dist" "$site" "$run_dir"
+          uv build --wheel --out-dir "$dist"
+          wheel_path="$(find "$dist" -maxdepth 1 -name '*.whl' -print -quit)"
+          uv pip install --target "$site" --no-deps "$wheel_path"
+          (
+            cd "$run_dir"
+            PYTHONPATH="$site" DATABASE_URL="sqlite:///$run_dir/wheel.db" \
+              "$GITHUB_WORKSPACE/.venv/bin/python" -c "from agency_mcp.db import migrate_db; migrate_db()"
+          )

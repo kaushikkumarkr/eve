@@ -1,0 +1,527 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.47.16.16243",
+      "templateHash": "14063462330963999402"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Azure region. Must match the existing Container Apps environment region."
+      }
+    },
+    "containerAppsEnvironmentName": {
+      "type": "string",
+      "metadata": {
+        "description": "Existing internal Container Apps environment created by main.bicep."
+      }
+    },
+    "registryName": {
+      "type": "string",
+      "metadata": {
+        "description": "Existing Azure Container Registry created by main.bicep."
+      }
+    },
+    "runtimeVaultName": {
+      "type": "string",
+      "metadata": {
+        "description": "Existing runtime Key Vault created by main.bicep."
+      }
+    },
+    "clientVaultName": {
+      "type": "string",
+      "metadata": {
+        "description": "Existing client credentials Key Vault created by main.bicep."
+      }
+    },
+    "controlIdentityName": {
+      "type": "string",
+      "defaultValue": "eve-control",
+      "metadata": {
+        "description": "Existing Eve managed identity names created by main.bicep."
+      }
+    },
+    "executorIdentityName": {
+      "type": "string",
+      "defaultValue": "eve-executor"
+    },
+    "controlAppName": {
+      "type": "string",
+      "metadata": {
+        "description": "Container App resource names."
+      }
+    },
+    "executorJobName": {
+      "type": "string"
+    },
+    "containerImage": {
+      "type": "string",
+      "metadata": {
+        "description": "Immutable image reference in ACR, preferably including an sha256 digest."
+      }
+    },
+    "databaseConnectionSecretName": {
+      "type": "string",
+      "defaultValue": "eve-database-url",
+      "metadata": {
+        "description": "Existing Key Vault secret name containing a least-privilege Eve database connection string."
+      }
+    },
+    "enableDatabaseBootstrap": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Enable only for the one-shot database bootstrap deployment. Remove this job and its temporary vault role after it succeeds."
+      }
+    },
+    "postgresAdminConnectionUrl": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Bootstrap-only administrator database URL; supplied securely and never used by app or executor."
+      }
+    },
+    "bootstrapJobName": {
+      "type": "string",
+      "defaultValue": "eve-db-bootstrap-staging"
+    },
+    "entraTenantId": {
+      "type": "string",
+      "metadata": {
+        "description": "Single-tenant Microsoft Entra tenant GUID and API audience."
+      }
+    },
+    "mcpAudience": {
+      "type": "string"
+    },
+    "mcpAuthMode": {
+      "type": "string",
+      "defaultValue": "entra",
+      "allowedValues": [
+        "entra",
+        "auth0"
+      ],
+      "metadata": {
+        "description": "OAuth mode for the MCP endpoint. Keep entra for the current live deployment; use auth0 only after completing the Auth0 federation setup."
+      }
+    },
+    "auth0Domain": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Auth0 tenant host, for example eve-team.us.auth0.com. Required only when mcpAuthMode is auth0."
+      }
+    },
+    "auth0Audience": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Auth0 API identifier; for this deployment it must exactly equal mcpPublicUrl."
+      }
+    },
+    "auth0RoleClaim": {
+      "type": "string",
+      "defaultValue": "https://eve.internal/roles"
+    },
+    "mcpPublicUrl": {
+      "type": "string",
+      "metadata": {
+        "description": "HTTPS URL operators use to reach the private MCP endpoint, including /mcp."
+      }
+    },
+    "adsMode": {
+      "type": "string",
+      "defaultValue": "mock",
+      "allowedValues": [
+        "mock",
+        "real"
+      ],
+      "metadata": {
+        "description": "Mock remains the default until a real account-scoped Ads key is securely provisioned."
+      }
+    },
+    "mutationsEnabled": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Must remain false by default. Enables only already-approved paused resource builds, never activation."
+      }
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Common deployment tags."
+      }
+    }
+  },
+  "variables": {
+    "acrPullRoleId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]",
+    "keyVaultSecretsOfficerRoleId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7')]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName'))]",
+      "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('controlIdentityName')), variables('acrPullRoleId'))]",
+      "properties": {
+        "roleDefinitionId": "[variables('acrPullRoleId')]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('controlIdentityName')), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName'))]",
+      "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('executorIdentityName')), variables('acrPullRoleId'))]",
+      "properties": {
+        "roleDefinitionId": "[variables('acrPullRoleId')]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('executorIdentityName')), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2025-07-01",
+      "name": "[parameters('controlAppName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('controlIdentityName')))]": {}
+        }
+      },
+      "properties": {
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', parameters('containerAppsEnvironmentName'))]",
+        "configuration": {
+          "activeRevisionsMode": "Single",
+          "registries": [
+            {
+              "server": "[reference(resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName')), '2023-07-01').loginServer]",
+              "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('controlIdentityName'))]"
+            }
+          ],
+          "secrets": [
+            {
+              "name": "database-url",
+              "keyVaultUrl": "[format('{0}secrets/{1}', reference(resourceId('Microsoft.KeyVault/vaults', parameters('runtimeVaultName')), '2023-07-01').vaultUri, parameters('databaseConnectionSecretName'))]",
+              "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('controlIdentityName'))]"
+            }
+          ],
+          "ingress": {
+            "external": true,
+            "allowInsecure": false,
+            "targetPort": 8000,
+            "transport": "http"
+          }
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "eve-control",
+              "image": "[parameters('containerImage')]",
+              "resources": {
+                "cpu": "[json('0.25')]",
+                "memory": "0.5Gi"
+              },
+              "env": [
+                {
+                  "name": "DATABASE_URL",
+                  "secretRef": "database-url"
+                },
+                {
+                  "name": "ADS_MODE",
+                  "value": "[parameters('adsMode')]"
+                },
+                {
+                  "name": "AGENCY_MUTATIONS_ENABLED",
+                  "value": "[if(parameters('mutationsEnabled'), 'true', 'false')]"
+                },
+                {
+                  "name": "AGENCY_MCP_TRANSPORT",
+                  "value": "streamable-http"
+                },
+                {
+                  "name": "AGENCY_MCP_JSON_RESPONSE",
+                  "value": "true"
+                },
+                {
+                  "name": "AGENCY_MCP_STATELESS_HTTP",
+                  "value": "true"
+                },
+                {
+                  "name": "AGENCY_MCP_HOST",
+                  "value": "0.0.0.0"
+                },
+                {
+                  "name": "AGENCY_MCP_AUTH_MODE",
+                  "value": "[parameters('mcpAuthMode')]"
+                },
+                {
+                  "name": "AGENCY_MCP_PUBLIC_URL",
+                  "value": "[parameters('mcpPublicUrl')]"
+                },
+                {
+                  "name": "AZURE_TENANT_ID",
+                  "value": "[parameters('entraTenantId')]"
+                },
+                {
+                  "name": "AGENCY_MCP_AUDIENCE",
+                  "value": "[parameters('mcpAudience')]"
+                },
+                {
+                  "name": "AUTH0_DOMAIN",
+                  "value": "[parameters('auth0Domain')]"
+                },
+                {
+                  "name": "AUTH0_AUDIENCE",
+                  "value": "[parameters('auth0Audience')]"
+                },
+                {
+                  "name": "AUTH0_ROLE_CLAIM",
+                  "value": "[parameters('auth0RoleClaim')]"
+                },
+                {
+                  "name": "EVE_SECRET_BACKEND",
+                  "value": "azure_key_vault"
+                },
+                {
+                  "name": "EVE_PROCESS_ROLE",
+                  "value": "control"
+                },
+                {
+                  "name": "AGENCY_ROLE",
+                  "value": "operator"
+                }
+              ]
+            }
+          ],
+          "scale": {
+            "minReplicas": 0,
+            "maxReplicas": 3
+          }
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('controlIdentityName')), variables('acrPullRoleId')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/jobs",
+      "apiVersion": "2025-07-01",
+      "name": "[parameters('executorJobName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('executorIdentityName')))]": {}
+        }
+      },
+      "properties": {
+        "environmentId": "[resourceId('Microsoft.App/managedEnvironments', parameters('containerAppsEnvironmentName'))]",
+        "configuration": {
+          "triggerType": "Schedule",
+          "replicaTimeout": 600,
+          "replicaRetryLimit": 1,
+          "scheduleTriggerConfig": {
+            "cronExpression": "*/1 * * * *",
+            "parallelism": 1,
+            "replicaCompletionCount": 1
+          },
+          "registries": [
+            {
+              "server": "[reference(resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName')), '2023-07-01').loginServer]",
+              "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('executorIdentityName'))]"
+            }
+          ],
+          "secrets": [
+            {
+              "name": "database-url",
+              "keyVaultUrl": "[format('{0}secrets/{1}', reference(resourceId('Microsoft.KeyVault/vaults', parameters('runtimeVaultName')), '2023-07-01').vaultUri, parameters('databaseConnectionSecretName'))]",
+              "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('executorIdentityName'))]"
+            }
+          ]
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "eve-executor-drain",
+              "image": "[parameters('containerImage')]",
+              "command": [
+                "agency"
+              ],
+              "args": [
+                "executor-drain",
+                "--limit",
+                "10"
+              ],
+              "resources": {
+                "cpu": "[json('0.25')]",
+                "memory": "0.5Gi"
+              },
+              "env": [
+                {
+                  "name": "DATABASE_URL",
+                  "secretRef": "database-url"
+                },
+                {
+                  "name": "ADS_MODE",
+                  "value": "[parameters('adsMode')]"
+                },
+                {
+                  "name": "AGENCY_MUTATIONS_ENABLED",
+                  "value": "[if(parameters('mutationsEnabled'), 'true', 'false')]"
+                },
+                {
+                  "name": "EVE_SECRET_BACKEND",
+                  "value": "azure_key_vault"
+                },
+                {
+                  "name": "AZURE_KEY_VAULT_URL",
+                  "value": "[reference(resourceId('Microsoft.KeyVault/vaults', parameters('clientVaultName')), '2023-07-01').vaultUri]"
+                },
+                {
+                  "name": "AZURE_CLIENT_ID",
+                  "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('executorIdentityName')), '2023-01-31').clientId]"
+                },
+                {
+                  "name": "EVE_PROCESS_ROLE",
+                  "value": "executor"
+                },
+                {
+                  "name": "AGENCY_ROLE",
+                  "value": "operator"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('executorIdentityName')), variables('acrPullRoleId')))]"
+      ]
+    },
+    {
+      "condition": "[parameters('enableDatabaseBootstrap')]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.KeyVault/vaults', parameters('runtimeVaultName'))]",
+      "name": "[guid(resourceId('Microsoft.KeyVault/vaults', parameters('runtimeVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('controlIdentityName')), variables('keyVaultSecretsOfficerRoleId'), 'temporary-db-bootstrap')]",
+      "properties": {
+        "roleDefinitionId": "[variables('keyVaultSecretsOfficerRoleId')]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('controlIdentityName')), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    },
+    {
+      "condition": "[parameters('enableDatabaseBootstrap')]",
+      "type": "Microsoft.App/jobs",
+      "apiVersion": "2025-07-01",
+      "name": "[parameters('bootstrapJobName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('controlIdentityName')))]": {}
+        }
+      },
+      "properties": {
+        "environmentId": "[resourceId('Microsoft.App/managedEnvironments', parameters('containerAppsEnvironmentName'))]",
+        "configuration": {
+          "triggerType": "Manual",
+          "replicaTimeout": 1800,
+          "replicaRetryLimit": 0,
+          "manualTriggerConfig": {
+            "parallelism": 1,
+            "replicaCompletionCount": 1
+          },
+          "registries": [
+            {
+              "server": "[reference(resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName')), '2023-07-01').loginServer]",
+              "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('controlIdentityName'))]"
+            }
+          ],
+          "secrets": [
+            {
+              "name": "database-admin-url",
+              "value": "[parameters('postgresAdminConnectionUrl')]"
+            }
+          ]
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "eve-db-bootstrap",
+              "image": "[parameters('containerImage')]",
+              "command": [
+                "agency"
+              ],
+              "args": [
+                "db-bootstrap-runtime"
+              ],
+              "resources": {
+                "cpu": "[json('0.25')]",
+                "memory": "0.5Gi"
+              },
+              "env": [
+                {
+                  "name": "DATABASE_URL",
+                  "secretRef": "database-admin-url"
+                },
+                {
+                  "name": "EVE_PROCESS_ROLE",
+                  "value": "bootstrap"
+                },
+                {
+                  "name": "EVE_SECRET_BACKEND",
+                  "value": "azure_key_vault"
+                },
+                {
+                  "name": "AZURE_KEY_VAULT_URL",
+                  "value": "[reference(resourceId('Microsoft.KeyVault/vaults', parameters('runtimeVaultName')), '2023-07-01').vaultUri]"
+                },
+                {
+                  "name": "EVE_DATABASE_RUNTIME_SECRET_NAME",
+                  "value": "[parameters('databaseConnectionSecretName')]"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', parameters('runtimeVaultName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', parameters('runtimeVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('controlIdentityName')), variables('keyVaultSecretsOfficerRoleId'), 'temporary-db-bootstrap'))]",
+        "[extensionResourceId(resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('controlIdentityName')), variables('acrPullRoleId')))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "controlAppId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.App/containerApps', parameters('controlAppName'))]"
+    },
+    "controlAppFqdn": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.App/containerApps', parameters('controlAppName')), '2025-07-01').configuration.ingress.fqdn]"
+    },
+    "executorJobId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.App/jobs', parameters('executorJobName'))]"
+    },
+    "databaseBootstrapJobId": {
+      "type": "string",
+      "value": "[if(parameters('enableDatabaseBootstrap'), resourceId('Microsoft.App/jobs', parameters('bootstrapJobName')), '')]"
+    }
+  }
+}

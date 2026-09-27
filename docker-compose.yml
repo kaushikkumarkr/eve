@@ -2,15 +2,15 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: agency
-      POSTGRES_USER: agency
-      POSTGRES_PASSWORD: agency
+      POSTGRES_DB: ${AGENCY_POSTGRES_DB:-agency}
+      POSTGRES_USER: ${AGENCY_POSTGRES_USER:-agency}
+      POSTGRES_PASSWORD: ${AGENCY_POSTGRES_PASSWORD:?Set AGENCY_POSTGRES_PASSWORD in .env}
     ports:
-      - "55432:5432"
+      - "${AGENCY_POSTGRES_BIND_ADDRESS:-127.0.0.1}:${AGENCY_POSTGRES_PORT:-55432}:5432"
     volumes:
       - agency-postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U agency -d agency"]
+      test: ["CMD-SHELL", "pg_isready -U ${AGENCY_POSTGRES_USER:-agency} -d ${AGENCY_POSTGRES_DB:-agency}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -21,12 +21,27 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql+psycopg://agency:agency@postgres:5432/agency
+      DATABASE_URL: postgresql+psycopg://${AGENCY_POSTGRES_USER:-agency}:${AGENCY_POSTGRES_PASSWORD:?Set AGENCY_POSTGRES_PASSWORD in .env}@postgres:5432/${AGENCY_POSTGRES_DB:-agency}
       AGENCY_MCP_TRANSPORT: streamable-http
       AGENCY_MCP_HOST: 0.0.0.0
       AGENCY_MCP_PORT: 8000
     ports:
-      - "8000:8000"
+      - "${AGENCY_MCP_BIND_ADDRESS:-127.0.0.1}:${AGENCY_MCP_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  agency-executor:
+    profiles: ["shared"]
+    build: .
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${AGENCY_POSTGRES_USER:-agency}:${AGENCY_POSTGRES_PASSWORD:?Set AGENCY_POSTGRES_PASSWORD in .env}@postgres:5432/${AGENCY_POSTGRES_DB:-agency}
+      EVE_PROCESS_ROLE: executor
+      AGENCY_ROLE: operator
+    command: ["agency", "executor-worker", "--poll-interval-seconds", "5", "--batch-size", "10"]
+    restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy

@@ -1,0 +1,201 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.47.16.16243",
+      "templateHash": "5239010145274922346"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Azure region of the existing Container Apps environment."
+      }
+    },
+    "containerAppsEnvironmentName": {
+      "type": "string",
+      "metadata": {
+        "description": "Existing Container Apps environment."
+      }
+    },
+    "registryName": {
+      "type": "string",
+      "metadata": {
+        "description": "Existing Azure Container Registry."
+      }
+    },
+    "runtimeVaultName": {
+      "type": "string",
+      "metadata": {
+        "description": "Existing runtime Key Vault receiving the least-privilege database URL."
+      }
+    },
+    "controlIdentityName": {
+      "type": "string",
+      "defaultValue": "eve-control",
+      "metadata": {
+        "description": "Existing Eve control managed identity. Its vault write role is temporary."
+      }
+    },
+    "containerImage": {
+      "type": "string",
+      "metadata": {
+        "description": "Immutable image reference in ACR."
+      }
+    },
+    "bootstrapJobName": {
+      "type": "string",
+      "defaultValue": "eve-db-bootstrap-cu",
+      "metadata": {
+        "description": "One-shot manual job resource name."
+      }
+    },
+    "databaseConnectionSecretName": {
+      "type": "string",
+      "defaultValue": "eve-database-url",
+      "metadata": {
+        "description": "Name for the least-privilege runtime database URL secret."
+      }
+    },
+    "postgresAdminConnectionUrl": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Bootstrap-only PostgreSQL administrator URL; never supplied to runtime apps."
+      }
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Common tags."
+      }
+    }
+  },
+  "variables": {
+    "keyVaultSecretsOfficerRoleId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7')]",
+    "acrPullRoleId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName'))]",
+      "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('controlIdentityName')), variables('acrPullRoleId'))]",
+      "properties": {
+        "roleDefinitionId": "[variables('acrPullRoleId')]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('controlIdentityName')), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.KeyVault/vaults', parameters('runtimeVaultName'))]",
+      "name": "[guid(resourceId('Microsoft.KeyVault/vaults', parameters('runtimeVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('controlIdentityName')), variables('keyVaultSecretsOfficerRoleId'), 'temporary-db-bootstrap')]",
+      "properties": {
+        "roleDefinitionId": "[variables('keyVaultSecretsOfficerRoleId')]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('controlIdentityName')), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    },
+    {
+      "type": "Microsoft.App/jobs",
+      "apiVersion": "2025-07-01",
+      "name": "[parameters('bootstrapJobName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('controlIdentityName')))]": {}
+        }
+      },
+      "properties": {
+        "environmentId": "[resourceId('Microsoft.App/managedEnvironments', parameters('containerAppsEnvironmentName'))]",
+        "configuration": {
+          "triggerType": "Manual",
+          "replicaTimeout": 1800,
+          "replicaRetryLimit": 0,
+          "manualTriggerConfig": {
+            "parallelism": 1,
+            "replicaCompletionCount": 1
+          },
+          "registries": [
+            {
+              "server": "[reference(resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName')), '2023-07-01').loginServer]",
+              "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('controlIdentityName'))]"
+            }
+          ],
+          "secrets": [
+            {
+              "name": "database-admin-url",
+              "value": "[parameters('postgresAdminConnectionUrl')]"
+            }
+          ]
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "eve-db-bootstrap",
+              "image": "[parameters('containerImage')]",
+              "command": [
+                "agency"
+              ],
+              "args": [
+                "db-bootstrap-runtime"
+              ],
+              "resources": {
+                "cpu": "[json('0.25')]",
+                "memory": "0.5Gi"
+              },
+              "env": [
+                {
+                  "name": "DATABASE_URL",
+                  "secretRef": "database-admin-url"
+                },
+                {
+                  "name": "EVE_PROCESS_ROLE",
+                  "value": "bootstrap"
+                },
+                {
+                  "name": "EVE_SECRET_BACKEND",
+                  "value": "azure_key_vault"
+                },
+                {
+                  "name": "AZURE_KEY_VAULT_URL",
+                  "value": "[reference(resourceId('Microsoft.KeyVault/vaults', parameters('runtimeVaultName')), '2023-07-01').vaultUri]"
+                },
+                {
+                  "name": "AZURE_CLIENT_ID",
+                  "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('controlIdentityName')), '2023-01-31').clientId]"
+                },
+                {
+                  "name": "EVE_DATABASE_RUNTIME_SECRET_NAME",
+                  "value": "[parameters('databaseConnectionSecretName')]"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', parameters('runtimeVaultName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', parameters('runtimeVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('controlIdentityName')), variables('keyVaultSecretsOfficerRoleId'), 'temporary-db-bootstrap'))]",
+        "[extensionResourceId(resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('controlIdentityName')), variables('acrPullRoleId')))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "bootstrapRoleAssignmentName": {
+      "type": "string",
+      "value": "[guid(resourceId('Microsoft.KeyVault/vaults', parameters('runtimeVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('controlIdentityName')), variables('keyVaultSecretsOfficerRoleId'), 'temporary-db-bootstrap')]"
+    },
+    "bootstrapJobId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.App/jobs', parameters('bootstrapJobName'))]"
+    }
+  }
+}
