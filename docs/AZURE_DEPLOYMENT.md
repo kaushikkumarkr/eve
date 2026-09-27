@@ -2,6 +2,10 @@
 
 This guide is the handover record for staging and production. It intentionally contains no subscription IDs, tenant IDs, resource names, credentials, or client keys.
 
+## Staging retirement
+
+The previous NeonPing staging deployment was stopped and its dedicated resource group was submitted for deletion on 2026-09-27. There is no active staging MCP URL. The last Codex smoke test saw zero client records. No database export or Key Vault secret values were migrated; treat a new deployment as an empty environment and provision new credentials. The old PostgreSQL service had only same-subscription short-retention recovery, which is not a cross-account migration mechanism.
+
 ## Why Azure-first
 
 Azure is the right foundation for Eve because it combines managed PostgreSQL, Key Vault, managed identities, Entra ID, container deployment, monitoring, and resource-group isolation. It is not a requirement to make every network component Azure-native on day one: a small private overlay such as Tailscale can provide safer operator connectivity than exposing MCP publicly.
@@ -44,9 +48,11 @@ The control service has no client-secrets-vault permission. The executor identit
 
 ## Network and trust boundaries
 
-The team MCP endpoint is HTTPS-public for supported remote MCP clients, but it is not anonymous: every tool requires a single-tenant Microsoft Entra v2 token with the `operator` delegated scope and an assigned `Eve.Operator` or `Eve.Admin` role. ChatGPT plan support is not universal: OpenAI's current [MCP Apps help page](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt) lists Business, Enterprise, and Edu for developer mode/custom MCP apps; verify availability in each user's account before promising Plus support. PostgreSQL public access is disabled. Both Key Vaults are reached through private endpoints and private DNS. MCP clients never receive database credentials and must not connect directly to PostgreSQL.
+The raw MCP endpoint must remain private behind an authenticated gateway/private operator route; do not expose the Container App's MCP ingress directly to the Internet. Eve also validates a single-tenant Microsoft Entra v2 access token with the `operator` delegated scope and assigned `Eve.Operator` or `Eve.Admin` role. PostgreSQL public access is disabled. Both Key Vaults are reached through private endpoints and private DNS. MCP clients never receive database credentials and must not connect directly to PostgreSQL.
 
-`infra/azure/mcp-host.bicep` creates a dedicated VNet, external HTTPS Container Apps environment, private PostgreSQL Flexible Server, and Key Vault private endpoints. `infra/azure/apps.bicep` deploys the MCP control app and scheduled no-ingress executor job with separate managed identities. The control app scales to zero to constrain idle cost. Safe defaults remain `ADS_MODE=mock` and `AGENCY_MUTATIONS_ENABLED=false`; the older internal-only `main.bicep` environment is not the shared endpoint.
+For a fresh deployment, use `infra/azure/main.bicep` as the parameterized foundation and `infra/azure/apps.bicep` for the control app and scheduled no-ingress executor. `main.bicep` has no public-ingress option; it creates a private Container Apps environment, PostgreSQL, Key Vaults, VNet, registry, logs, and managed identities. Keep `ADS_MODE=mock` and `AGENCY_MUTATIONS_ENABLED=false`. Follow the bootstrap steps below before starting the app tier.
+
+`infra/azure/mcp-host.bicep` is an alternate external-ingress host pattern, not the default fresh-deployment path. It creates a public-network-enabled Container Apps environment. Do **not** deploy it as-is under this repository's security contract: the raw MCP service must not be exposed directly to the public Internet. If a remote client requires public routing, first put a private authenticated gateway in front and restrict Container Apps ingress to that gateway; the gateway and its identity policy are not provisioned by this template. For a private team route, deploy and verify the VPN/overlay routing separately before onboarding operators.
 
 `infra/azure/db-bootstrap.bicep` is a one-time privileged step. It runs migrations, creates or updates the least-privilege `eve_app` login, and writes only that runtime URL to the runtime Key Vault. It temporarily grants Key Vault Secrets Officer to the bootstrap identity. After completion, delete the bootstrap job and temporary role assignment. Never retain the PostgreSQL admin URL in app settings, parameter files, CLI history, or Eve. Allow several minutes for Azure RBAC propagation before starting the job.
 
@@ -62,7 +68,7 @@ For local development, Docker PostgreSQL is sufficient. SQLite must not become t
 
 ## Container deployment
 
-The control app is externally reachable over HTTPS, but every MCP tool advertises OAuth and the service validates Entra tokens. Its separately authenticated admin route accepts only a deterministic secret locator from the CLI; it never receives a credential value. The app reaches PostgreSQL and runtime Key Vault through the VNet.
+The control app must be reachable only through the approved private route/gateway; the app's Entra validation is defense in depth, not a substitute for network isolation. Its separately authenticated admin route accepts only a deterministic secret locator from the CLI; it never receives a credential value. The app reaches PostgreSQL and runtime Key Vault through the VNet.
 
 The executor is a scheduled Container Apps Job with no ingress; it drains only explicitly queued work and reads a client Ads key only when required. Build images for `linux/amd64` (Container Apps rejects a native ARM64 image) and deploy by ACR digest. Verify the unauthenticated `/mcp` OAuth challenge and protected-resource metadata, connect from ChatGPT with OAuth, and test that an unassigned user is denied and an operator cannot approve or apply. An admin role alone does not activate or spend. Keep Ads objects paused and mock mode enabled until client approval.
 
@@ -97,9 +103,9 @@ Custom role creation requires subscription-level role-definition administration;
 
 The repo uses parameterized infrastructure and database migrations, so moving to another Azure subscription/account is a controlled rebuild rather than a copy of a machine.
 
-1. Create new staging resource group and deploy the same `infra/azure` parameters for the new environment.
-2. Create new identities, Entra application/gateway configuration, Key Vaults, and private network route.
-3. Restore PostgreSQL into the new server and run the test suite plus MCP smoke checks.
+1. Create a new resource group and deploy the reviewed `main.bicep` + `apps.bicep` path with fresh names, passwords, identity configuration, and private access routing.
+2. Create the new tenant's Entra application, app roles, operator/admin groups, managed-identity RBAC, gateway/VPN, and Key Vault configuration. These tenant-specific settings cannot be copied from Git.
+3. If migrating live records, export PostgreSQL logically (for example with `pg_dump`) while the source server is still available, transfer the encrypted export through an approved channel, restore it into the new private server, and run the suite plus MCP smoke tests. Azure-managed flexible-server backups are not a cross-subscription database-transfer artifact; test a logical export/restore before retiring a source that contains data.
 4. Re-enter or rotate client Ads/CAPI keys through the new Key Vault. Do **not** export plaintext secrets from the old vault as a migration artifact.
 5. Compare client/workspace counts, sample evidence hashes, change hashes, and metric snapshots.
 6. Shift private DNS/gateway route only after staging checks pass; keep old resources read-only through the agreed rollback window.

@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "5239010145274922346"
+      "templateHash": "6159774062981412636"
     }
   },
   "parameters": {
@@ -143,14 +143,15 @@
               "name": "eve-db-bootstrap",
               "image": "[parameters('containerImage')]",
               "command": [
-                "agency"
+                "/bin/sh",
+                "-c"
               ],
               "args": [
-                "db-bootstrap-runtime"
+                "echo EVE_BOOTSTRAP_EVENT container_started; exec agency db-bootstrap-runtime"
               ],
               "resources": {
-                "cpu": "[json('0.25')]",
-                "memory": "0.5Gi"
+                "cpu": "[json('0.5')]",
+                "memory": "1Gi"
               },
               "env": [
                 {

@@ -3,9 +3,6 @@ targetScope = 'resourceGroup'
 @description('Azure region for this isolated Eve environment.')
 param location string = resourceGroup().location
 
-@description('Allow internet ingress to the Container Apps environment. The Eve MCP app must still enforce OAuth/Entra authentication; PostgreSQL and Key Vault remain private.')
-param publicMcpIngress bool = false
-
 @description('Globally unique lowercase ACR name, 5-50 alphanumeric characters.')
 param registryName string
 
@@ -374,10 +371,10 @@ resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2025-07-01'
   location: location
   tags: tags
   properties: {
-    publicNetworkAccess: publicMcpIngress ? 'Enabled' : 'Disabled'
+    publicNetworkAccess: 'Disabled'
     vnetConfiguration: {
       infrastructureSubnetId: resourceId('Microsoft.Network/virtualNetworks/subnets', virtualNetworkName, 'container-apps-infrastructure')
-      internal: !publicMcpIngress
+      internal: true
     }
     appLogsConfiguration: {
       destination: 'log-analytics'

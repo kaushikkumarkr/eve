@@ -2,46 +2,17 @@
 
 Eve is an internal, MCP-first system for running ChatGPT Ads as an agency service. ChatGPT is the team's reasoning/orchestration surface; Eve provides the durable client record, deterministic validation, approval controls, and safe Ads API boundary.
 
-The intended ChatGPT workflow uses OpenAI's official Ads Manager app and Eve MCP as separate apps. Eve has no direct server-side connection to the Ads Manager app. Actions/metrics relayed into Eve are labeled operator-reported unless Eve obtained them from the Ads API. The current staging MCP is connected to Codex CLI with shared bearer tokens; ChatGPT's OAuth connection is not configured yet. See [staging status and team setup](#staging-status-and-team-setup) and the [Ads Manager handoff guide](docs/MCP_OPERATOR_GUIDE.md#chatgpt-team-workflow-after-eve-oauth-is-configured).
+The intended ChatGPT workflow uses OpenAI's official Ads Manager app and Eve MCP as separate apps. Eve has no direct server-side connection to the Ads Manager app. Actions/metrics relayed into Eve are labeled operator-reported unless Eve obtained them from the Ads API. The former Azure staging deployment was retired on 2026-09-27; there is currently no live Eve MCP endpoint. See [Azure status and redeployment](#azure-status-and-redeployment) and the [Ads Manager handoff guide](docs/MCP_OPERATOR_GUIDE.md#chatgpt-team-workflow-after-eve-oauth-is-configured).
 
 It is deliberately **not** an AEO/GEO tool, client dashboard, keyword platform, bid bot, visibility-score product, or generic Ads API proxy.
 
-## Team quick start: connect Codex to Eve
+## Azure status and redeployment
 
-This is the main way teammates connect to the live staging MCP server. The endpoint is:
+The former Eve staging service was stopped and its dedicated Azure resource group was submitted for deletion on 2026-09-27. The old MCP URL is no longer usable; the old shared bearer tokens must not be reused. No production client workspace was present in the last Codex smoke test. No client data or Key Vault secret values were exported for migration; provision fresh credentials in the new environment.
 
-```text
-https://eve-control-staging.politebay-59d3284e.centralus.azurecontainerapps.io/mcp
-```
+The repository contains parameterized Azure Bicep templates, Alembic database migrations, container build files, operator/authentication guides, and a migration checklist. All five Bicep templates compile. These are deployment building blocks, **not yet a verified one-command deployment to a different Azure tenant**: the new tenant still needs its own Entra app/roles, private access route, managed-identity role assignments, Key Vault configuration, image registry/build, and secure runtime database bootstrap.
 
-1. Ask the designated Eve admin for the **operator** bearer token through the agency password manager or another approved secure channel. Do not use the admin token.
-2. In Terminal, enter the token silently. This example works in zsh and bash and keeps it out of shell history:
-
-   ```bash
-   if [ -n "$ZSH_VERSION" ]; then
-     read -r -s 'EVE_MCP_OPERATOR_TOKEN?Eve operator token: '
-   else
-     read -r -s -p "Eve operator token: " EVE_MCP_OPERATOR_TOKEN
-   fi
-   printf '\n'
-   export EVE_MCP_OPERATOR_TOKEN
-   ```
-
-3. Add Eve to Codex, then launch Codex from that same Terminal session so it inherits the token:
-
-   ```bash
-   codex mcp add eve-staging \
-     --url https://eve-control-staging.politebay-59d3284e.centralus.azurecontainerapps.io/mcp \
-     --bearer-token-env-var EVE_MCP_OPERATOR_TOKEN
-   codex mcp list
-   codex
-   ```
-
-   If `eve-staging` is already configured, do not add a duplicate; confirm it uses `EVE_MCP_OPERATOR_TOKEN` and restart Codex from a Terminal session where the variable is set.
-
-4. Verify the connection by asking Codex to call only `clients_list` and report the number of records.
-
-**Staging/security limits:** this is a shared operator token, not an individual invitation or identity. Every operator-token holder shares the same Eve actor and access. Staging is configured for mock Ads mode with mutations disabled; use it only for zero-spend testing, not confidential client data or production campaigns. Never put the token in Git, `.env`, prompts, shell commands, or Codex config values. Full details and caveats are in [staging status and team setup](#staging-status-and-team-setup).
+Before redeploying, follow [the Azure deployment guide](docs/AZURE_DEPLOYMENT.md), [shared deployment contract](docs/SHARED_DEPLOYMENT.md), and [Azure template notes](infra/azure/README.md). Do not deploy the old static-token staging configuration. The raw MCP endpoint must remain behind a private authenticated gateway; the `mcp-host.bicep` public-ingress pattern must not be used as-is. Confirm the new private route and Entra authorization with read-only Codex smoke tests before loading any client data or keys.
 
 ## What Eve does
 
@@ -59,7 +30,7 @@ https://eve-control-staging.politebay-59d3284e.centralus.azurecontainerapps.io/m
 - Expose or accept Ads/CAPI keys through MCP, reports, source ingestion, or chat prompts.
 - Activate an ad, upload an audience, send conversion data, or spend money by default.
 - Let an LLM emit the JSON sent to the Ads API.
-- Expose PostgreSQL or allow unauthenticated MCP requests. The current staging MCP is internet-reachable over HTTPS and requires a bearer token; it is not behind a private network gateway.
+- Expose PostgreSQL, allow unauthenticated MCP requests, or expose the raw Streamable HTTP MCP service directly to the public Internet. Shared deployments must use a private authenticated gateway.
 
 The implementation follows the current official OpenAI Ads model: an account contains campaigns, campaigns contain ad groups, and ad groups contain ads; context hints are ad-group data, and OpenAI instructs advertisers to create resources paused before activation. [Ads API overview](https://developers.openai.com/ads/api-overview) · [Campaign management](https://developers.openai.com/ads/campaign-management)
 
@@ -100,29 +71,17 @@ DATABASE_URL="postgresql+psycopg://agency:${AGENCY_POSTGRES_PASSWORD}@127.0.0.1:
   uv run agency db-init
 ```
 
-## Staging status and team setup
+## Azure status and team access
 
-The live staging service remains in the NeonPing Azure account. Endpoint: `https://eve-control-staging.politebay-59d3284e.centralus.azurecontainerapps.io/mcp`.
-
-Current settings are `AGENCY_MCP_AUTH_MODE=static`, `ADS_MODE=mock`, and `AGENCY_MUTATIONS_ENABLED=false`. The endpoint requires a bearer token; anonymous requests return HTTP 401. Codex successfully connected and called the read-only `clients_list` tool. The staging database returned zero client records.
-
-### Important access limitation
-
-Staging uses two shared bearer credentials, not individual Entra identities. An NJIT or NeonPing invitation does **not** authorize a user, and Eve cannot identify which teammate used a shared token. Anyone holding a token can use its role. The operator token maps to the shared `agency-operator` identity; client grants to that identity are shared by every operator-token holder. The admin token has admin permissions and must only be given to the designated administrator. Store both in an approved password manager; never put them in Git, this README, `.env`, prompts, or a Codex config value.
-
-This is a staging/testing convenience, not a production identity model. Do not use shared-token mode for confidential client data, production client work, or real spend. Before production, replace it with individual identity-based authorization and a private authenticated gateway. Static bearer mode works with MCP clients that can send `Authorization: Bearer`; it is not the OAuth setup required by ChatGPT's custom MCP app screen. The Auth0/Entra OAuth plan is documented separately in [ChatGPT OAuth setup](docs/CHATGPT_OAUTH.md) and is not the active staging configuration.
-
-### Easy Codex CLI setup
-
-Use the [Team quick start above](#team-quick-start-connect-codex-to-eve). Codex supports `bearer_token_env_var`; see [OpenAI's MCP plugin authentication documentation](https://developers.openai.com/api/docs/guides/agents-api/tools/plugins). This setup is for Codex CLI launched from the same Terminal session. A desktop/IDE process launched separately may not inherit the shell variable; use a trusted OS credential-store helper for persistent GUI use. Never copy the token into `~/.codex/config.toml`.
+There is no active shared Eve endpoint at present. When redeploying, each teammate must use their own agency identity, and the client must separately grant that teammate the appropriate role in the client's Ads account. Do not use shared static bearer tokens for team or client work. Codex connection instructions must be generated from the new deployment's private gateway URL and authentication configuration; see [the deployment guide](docs/AZURE_DEPLOYMENT.md).
 
 ### ChatGPT Ads Manager is separate
 
-The official ChatGPT Ads Manager app is independent of Eve. The client account owner must invite agency operators to the advertiser account. Eve's `ads_manager_access_record` is an operator attestation, not a live platform check. To connect Eve itself to ChatGPT's custom MCP app, configure a supported OAuth flow; the current static bearer-token staging setup cannot be entered into that OAuth-only connection form.
+The official ChatGPT Ads Manager app is independent of Eve. The client account owner must invite agency operators to the advertiser account. Eve's `ads_manager_access_record` is an operator attestation, not a live platform check. To connect Eve itself to ChatGPT's custom MCP app, configure a supported OAuth flow; no active Eve endpoint or OAuth connection is currently deployed.
 
 ### Optional ChatGPT OAuth setup (not active in staging)
 
-The following OAuth setup notes describe a possible future configuration. They do not describe the current Codex bearer-token setup. Hosting Eve does not require an OpenAI API key.
+The following OAuth setup notes describe a future configuration. Hosting Eve does not require an OpenAI API key.
 
 #### Legacy ChatGPT OAuth requirements (not current Codex setup)
 
@@ -134,8 +93,8 @@ The following OAuth setup notes describe a possible future configuration. They d
 
 #### Optional ChatGPT OAuth flow (not currently deployed)
 
-1. Follow [Azure deployment](docs/AZURE_DEPLOYMENT.md) and [shared deployment/authentication](docs/SHARED_DEPLOYMENT.md). Deploy the authenticated Azure HTTPS endpoint, PostgreSQL, and Key Vault. Keep mutations disabled and Ads mode set to `mock` for the first connection test. Eve hosting does not require an OpenAI API key or tunnel credential.
-2. Codex uses the static bearer-token steps above. For a remote MCP app in ChatGPT web, follow [ChatGPT OAuth setup](docs/CHATGPT_OAUTH.md) only after implementing and testing an OAuth authorization server.
+1. Follow [Azure deployment](docs/AZURE_DEPLOYMENT.md) and [shared deployment/authentication](docs/SHARED_DEPLOYMENT.md). Deploy the private authenticated gateway, PostgreSQL, and Key Vault. Keep mutations disabled and Ads mode set to `mock` for the first connection test. Eve hosting does not require an OpenAI API key or tunnel credential.
+2. Configure Codex for the new deployment's identity provider and private gateway. For a remote MCP app in ChatGPT web, follow [ChatGPT OAuth setup](docs/CHATGPT_OAUTH.md) only after implementing and testing an OAuth authorization server.
 3. If configuring ChatGPT web, open **Settings → Security and login → Developer mode**, then open the custom MCP app creation screen. Use these app details:
 
    - **Name:** `Eve Ads Operations`
@@ -151,25 +110,23 @@ The following OAuth setup notes describe a possible future configuration. They d
 
 OpenAI documentation currently differs on plan eligibility: the [Developer Mode API docs](https://developers.openai.com/api/docs/guides/developer-mode) list Plus and Pro and describe read/write MCP tools, while the [Help Center article](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt) describes full write support as rolling out to Business, Enterprise, and Edu and says Pro is read/fetch-only. The app-creation screen confirms that an individual account can create an app, but tool scan and a harmless test call are still required to verify which actions that account can use. See also OpenAI's [Secure MCP Tunnel guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels), [Ads account roles](https://help.openai.com/en/articles/20001273-managing-identity-and-access-for-ads-manager), and [Ads Manager account setup for agencies](https://help.openai.com/en/articles/20001213-ads-manager-beta-account-setup).
 
-#### Previous Entra connection instructions (inactive)
+#### Codex with Entra after redeployment
 
-Do not use these steps for the current staging service. Staging now uses shared static bearer tokens; see **Easy Codex CLI setup** above. These Entra instructions are retained only as notes for a possible future identity-based deployment.
-
-The former Entra setup used the tenant and API registration described in [shared deployment/authentication](docs/SHARED_DEPLOYMENT.md). It required each teammate to redeem a tenant invitation, receive an Eve app role, and receive a matching `client_access_grant`. These steps do not apply to the current shared-token staging setup above.
+Use only after a new Entra API and private authenticated gateway are configured as described in [shared deployment/authentication](docs/SHARED_DEPLOYMENT.md). Replace every placeholder with values from the new deployment; never copy the former tenant ID or public staging URL.
 
 After invitation redemption, sign in to the agency tenant and consent to Eve's delegated `operator` scope:
 
 ```bash
-az login --tenant 071ac031-a58a-460a-b2c5-7b815b9b4f6c \
-  --scope 'https://eve-control-staging.politebay-59d3284e.centralus.azurecontainerapps.io/mcp/operator'
+az login --tenant <tenant-guid> \
+  --scope '<private-gateway-url>/operator'
 ```
 
 In `~/.codex/config.toml`, configure the Eve server and the local helper (replace the path with the absolute path to this checkout):
 
 ```toml
 [mcp_servers.eve]
-url = "https://eve-control-staging.politebay-59d3284e.centralus.azurecontainerapps.io/mcp"
-http_headers_helper = "python3 /absolute/path/to/eve/scripts/codex_azure_mcp_headers.py 071ac031-a58a-460a-b2c5-7b815b9b4f6c https://eve-control-staging.politebay-59d3284e.centralus.azurecontainerapps.io/mcp/operator"
+url = "<private-gateway-url>/mcp"
+http_headers_helper = "python3 /absolute/path/to/eve/scripts/codex_azure_mcp_headers.py <tenant-guid> <private-gateway-url>/operator"
 ```
 
 Remove any saved OAuth credential for this server because Codex gives saved OAuth credentials precedence over the helper, then restart Codex:

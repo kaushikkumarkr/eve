@@ -1,20 +1,26 @@
 # Azure foundation IaC
 
-`main.bicep` creates the private data/network foundation for one isolated environment:
+## Canonical fresh deployment
+
+For a fresh Azure subscription/account, use `main.bicep` followed by the one-time database bootstrap and `apps.bicep`. The foundation has no public-ingress switch: the Container Apps environment and data plane are private. A private VPN/overlay route is a separate prerequisite and is not created by these templates. The raw MCP endpoint must not be exposed directly to the public Internet.
+
+`main.bicep` creates the foundation for one isolated environment:
 
 - container registry;
 - log workspace and Container Apps environment;
 - a dedicated VNet with separate Container Apps, private endpoint, and PostgreSQL subnets;
-- an internal-only Container Apps environment with public network access disabled;
+- an internal-only Container Apps environment with public network access disabled by default;
 - private DNS and private endpoints for both Key Vaults;
 - private Azure Database for PostgreSQL Flexible Server (no public endpoint) and its database;
 - runtime Key Vault and separate client-secrets Key Vault;
 - `eve-control` and `eve-executor` managed identities;
 - runtime configuration read assignments and executor-only client-key read assignment.
 
-It does **not** create client secrets, a public MCP endpoint, Container Apps revisions, an Entra application, the team VPN/private route, or a least-privilege PostgreSQL runtime login. `apps.bicep` is the separate second-stage deployment for the control and executor apps; it references an existing Key Vault database URL, uses distinct managed identities, defaults to mock Ads mode, and keeps mutations disabled. Details are in [the Azure deployment guide](../../docs/AZURE_DEPLOYMENT.md).
+It does **not** create client secrets, an Entra application/app roles, the team VPN/private route, or a least-privilege PostgreSQL runtime login. `db-bootstrap.bicep` runs the one-time schema/database-role bootstrap. `apps.bicep` is the second-stage deployment for the control and executor; it uses distinct managed identities, defaults to Entra authentication and mock Ads mode, and keeps mutations disabled. Details are in [the Azure deployment guide](../../docs/AZURE_DEPLOYMENT.md).
 
-The Key Vaults and database have no public data-plane endpoint; the Container Apps environment is internal-only. Operators still need an approved private route (VPN or overlay subnet router) into the VNet before reaching MCP or administering Key Vault. Do not treat the infrastructure template alone as a running or authenticated Eve deployment.
+`mcp-host.bicep` is an alternate external-ingress host pattern. It enables public networking on a Container Apps environment and is **not** a safe standalone path under the repository's private-gateway requirement. Do not use it for a fresh deployment unless a separate authenticated gateway is deployed first and Container Apps ingress is restricted to that gateway.
+
+The Key Vaults and database have no public data-plane endpoint; the Container Apps environment is internal-only by default. Operators still need an approved private route (VPN or overlay subnet router) into the VNet before reaching MCP or administering Key Vault. Do not treat the infrastructure template alone as a running or authenticated Eve deployment.
 
 Plan the network before deployment: subnet ranges must not overlap connected networks and are difficult or impossible to change after service creation. The template creates a fresh internal environment; do not retrofit an older external Container Apps environment. See Microsoft's [Container Apps networking documentation](https://learn.microsoft.com/en-us/azure/container-apps/custom-virtual-networks).
 
@@ -22,7 +28,9 @@ Plan the network before deployment: subnet ranges must not overlap connected net
 
 ```bash
 az bicep build --file infra/azure/main.bicep
+az bicep build --file infra/azure/mcp-host.bicep
 az bicep build --file infra/azure/apps.bicep
+az bicep build --file infra/azure/db-bootstrap.bicep
 az bicep build --file infra/azure/secret-writer-role.bicep
 ```
 

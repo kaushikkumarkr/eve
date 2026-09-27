@@ -1,6 +1,6 @@
 # Eve MCP operator guide
 
-Eve is the agency's Ads operations control plane, not an autonomous ad buyer. The intended ChatGPT workflow uses two separately connected apps: OpenAI's official Ads Manager app for account-facing work and Eve MCP for client scope, evidence, planning, approvals, records, and reporting. The current staging Eve endpoint instead uses shared static bearer tokens for Codex CLI; it is not yet connected as a ChatGPT OAuth app. See [the README team setup](../README.md#staging-status-and-team-setup). ChatGPT may coordinate both apps when OAuth is configured, but Eve cannot directly inspect or verify the official app's session.
+Eve is the agency's Ads operations control plane, not an autonomous ad buyer. The intended ChatGPT workflow uses two separately connected apps: OpenAI's official Ads Manager app for account-facing work and Eve MCP for client scope, evidence, planning, approvals, records, and reporting. The former shared-token Azure staging service was retired on 2026-09-27; a new private, individually authenticated deployment is required before team use. ChatGPT may coordinate both apps only after Eve's OAuth connection is configured, but Eve cannot directly inspect or verify the official app's session.
 
 ## Non-negotiable rules
 
@@ -35,16 +35,9 @@ uv run agency-mcp
 
 Use the local stdio server for development and tests with mock mode; this does not connect ChatGPT web to the laptop. ChatGPT's custom MCP app uses a remote server URL; for private/local development follow OpenAI's Secure MCP Tunnel guidance rather than exposing the raw MCP endpoint.
 
-### Current shared staging service (Codex CLI)
+### Current shared service status
 
-The current staging endpoint is internet-reachable over HTTPS and requires one of two shared bearer tokens. It is not behind a private gateway. A token holder can authenticate without an individual identity; invitations do not gate access, and operator client grants/audit actor IDs are shared across all operator-token users. Keep this configuration to zero-spend staging tests only. The database is not directly reachable by team machines.
-
-```text
-operator’s Codex CLI → HTTPS Eve MCP with shared bearer token → Eve service → PostgreSQL
-                                                          └→ Key Vault / Ads executor
-```
-
-For exact Codex setup commands see [the README](../README.md#easy-codex-cli-setup). The production target remains Entra identities plus a private authenticated gateway, with client grants keyed to immutable per-person IDs; the current shared-token staging exception does not provide that isolation. See [shared deployment authentication](SHARED_DEPLOYMENT.md#shared-mcp-authentication).
+There is no active Azure MCP endpoint. The prior public shared-token staging service was retired on 2026-09-27 and must not be reused. The next deployment must use individual Entra identities, per-person client grants, and a private authenticated gateway before teammates connect. See the [Azure deployment handover](AZURE_DEPLOYMENT.md) and [shared deployment authentication](SHARED_DEPLOYMENT.md#shared-mcp-authentication).
 
 ## Tool sequence
 

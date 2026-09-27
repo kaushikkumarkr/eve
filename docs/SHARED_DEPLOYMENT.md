@@ -22,7 +22,7 @@ This is a private internal system. Do not expose the raw Streamable HTTP MCP ser
 | Azure staging | Team smoke tests and zero-spend test Ads account | Staging Key Vault | Test data/account only |
 | Azure production | Approved client work | Production Key Vault and managed identities | Client data, backups, audit retention |
 
-Staging and production use separate resource groups, Key Vaults, databases, identities, and client credentials. **Current staging exception:** the deployed `eve-control-staging` app is internet-reachable over HTTPS and uses shared static operator/admin bearer tokens. This is only for zero-spend smoke tests; it does not meet the private-gateway/individual-identity production target below. The current setup is documented in the [README](../README.md#staging-status-and-team-setup).
+Staging and production must use separate resource groups, Key Vaults, databases, identities, and client credentials. The former shared-static-token staging deployment was retired on 2026-09-27; there is no active shared endpoint or valid staging operator token. Do not recreate that exception. For redeployment, use individual Entra identities and the private authenticated route described below, following the [Azure deployment handover](AZURE_DEPLOYMENT.md).
 
 ## Identity and client scope (production target)
 

@@ -42,9 +42,11 @@ jobs:
       - name: Compile private Azure foundation and verify checked-in ARM output
         run: |
           az bicep build --file infra/azure/main.bicep
+          az bicep build --file infra/azure/mcp-host.bicep
           az bicep build --file infra/azure/apps.bicep
+          az bicep build --file infra/azure/db-bootstrap.bicep
           az bicep build --file infra/azure/secret-writer-role.bicep
-          git diff --exit-code -- infra/azure/main.json infra/azure/apps.json infra/azure/secret-writer-role.json
+          git diff --exit-code -- infra/azure/main.json infra/azure/mcp-host.json infra/azure/apps.json infra/azure/db-bootstrap.json infra/azure/secret-writer-role.json
       - name: Verify installed wheel can initialize a database
         run: |
           dist="$RUNNER_TEMP/eve-wheel-dist"
