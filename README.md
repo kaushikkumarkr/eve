@@ -6,6 +6,43 @@ The intended ChatGPT workflow uses OpenAI's official Ads Manager app and Eve MCP
 
 It is deliberately **not** an AEO/GEO tool, client dashboard, keyword platform, bid bot, visibility-score product, or generic Ads API proxy.
 
+## Team quick start: connect Codex to Eve
+
+This is the main way teammates connect to the live staging MCP server. The endpoint is:
+
+```text
+https://eve-control-staging.politebay-59d3284e.centralus.azurecontainerapps.io/mcp
+```
+
+1. Ask the designated Eve admin for the **operator** bearer token through the agency password manager or another approved secure channel. Do not use the admin token.
+2. In Terminal, enter the token silently. This example works in zsh and bash and keeps it out of shell history:
+
+   ```bash
+   if [ -n "$ZSH_VERSION" ]; then
+     read -r -s 'EVE_MCP_OPERATOR_TOKEN?Eve operator token: '
+   else
+     read -r -s -p "Eve operator token: " EVE_MCP_OPERATOR_TOKEN
+   fi
+   printf '\n'
+   export EVE_MCP_OPERATOR_TOKEN
+   ```
+
+3. Add Eve to Codex, then launch Codex from that same Terminal session so it inherits the token:
+
+   ```bash
+   codex mcp add eve-staging \
+     --url https://eve-control-staging.politebay-59d3284e.centralus.azurecontainerapps.io/mcp \
+     --bearer-token-env-var EVE_MCP_OPERATOR_TOKEN
+   codex mcp list
+   codex
+   ```
+
+   If `eve-staging` is already configured, do not add a duplicate; confirm it uses `EVE_MCP_OPERATOR_TOKEN` and restart Codex from a Terminal session where the variable is set.
+
+4. Verify the connection by asking Codex to call only `clients_list` and report the number of records.
+
+**Staging/security limits:** this is a shared operator token, not an individual invitation or identity. Every operator-token holder shares the same Eve actor and access. Staging is configured for mock Ads mode with mutations disabled; use it only for zero-spend testing, not confidential client data or production campaigns. Never put the token in Git, `.env`, prompts, shell commands, or Codex config values. Full details and caveats are in [staging status and team setup](#staging-status-and-team-setup).
+
 ## What Eve does
 
 - Keeps a tenant-scoped PostgreSQL record of client scope, source evidence, hint sets, blueprints, approvals, metric snapshots, experiments, and audit events.
@@ -77,34 +114,7 @@ This is a staging/testing convenience, not a production identity model. Do not u
 
 ### Easy Codex CLI setup
 
-1. Obtain the operator token through the agency's approved secure sharing channel (preferably a password manager). Only the designated administrator should receive the admin token.
-2. In Terminal, enter the operator token silently so it is not saved in shell history:
-
-   ```bash
-   if [ -n "$ZSH_VERSION" ]; then
-     read -r -s 'EVE_MCP_OPERATOR_TOKEN?Eve operator token: '
-   else
-     read -r -s -p "Eve operator token: " EVE_MCP_OPERATOR_TOKEN
-   fi
-   printf '\n'
-   export EVE_MCP_OPERATOR_TOKEN
-   ```
-
-3. Add the server once, then launch Codex from that same Terminal session so it inherits the token:
-
-   ```bash
-   codex mcp add eve-staging \
-     --url https://eve-control-staging.politebay-59d3284e.centralus.azurecontainerapps.io/mcp \
-     --bearer-token-env-var EVE_MCP_OPERATOR_TOKEN
-   codex mcp list
-   codex
-   ```
-
-   If `eve-staging` is already configured, do not add a duplicate; check that it uses `EVE_MCP_OPERATOR_TOKEN` and restart Codex from a shell where that variable is set.
-
-4. For a first smoke test, ask Codex to call only `clients_list` or `workspace_readiness`. For an admin connection, repeat with the admin token in `EVE_MCP_ADMIN_TOKEN`, use a separate server name such as `eve-staging-admin`, and share that token only with the designated admin.
-
-Codex supports `bearer_token_env_var`; see [OpenAI's MCP plugin authentication documentation](https://developers.openai.com/api/docs/guides/agents-api/tools/plugins). This quick setup is for Codex CLI launched from the same Terminal session. A desktop/IDE process launched separately may not inherit the shell variable; use a trusted OS credential-store helper for persistent GUI use. Never copy the token into `~/.codex/config.toml`.
+Use the [Team quick start above](#team-quick-start-connect-codex-to-eve). Codex supports `bearer_token_env_var`; see [OpenAI's MCP plugin authentication documentation](https://developers.openai.com/api/docs/guides/agents-api/tools/plugins). This setup is for Codex CLI launched from the same Terminal session. A desktop/IDE process launched separately may not inherit the shell variable; use a trusted OS credential-store helper for persistent GUI use. Never copy the token into `~/.codex/config.toml`.
 
 ### ChatGPT Ads Manager is separate
 
